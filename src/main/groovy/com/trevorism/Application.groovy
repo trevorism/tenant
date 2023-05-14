@@ -8,9 +8,13 @@ import io.swagger.v3.oas.annotations.info.Info
 
 @OpenAPIDefinition(
         info = @Info(
-                contact = @Contact(url = "https://trevorism.com")
+                title = "Tenant",
+                version = "0.1.0",
+                description = "API for management of tenants within Trevorism",
+                contact = @Contact(url = "https://trevorism.com", name = "Trevor Brooks", email = "tbrooks@trevorism.com")
         )
 )
+
 @CompileStatic
 class Application {
     static void main(String[] args) {

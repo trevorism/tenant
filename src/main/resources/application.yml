@@ -4,7 +4,7 @@ micronaut:
   server:
     http-to-https-redirect: true
   security:
-    enabled: false
+    enabled: true
     redirect:
       enabled: false
   router:
