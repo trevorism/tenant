@@ -39,13 +39,13 @@ class TenantController {
     @Operation(summary = "Creates a new tenant **Secure")
     @Secure(Roles.SYSTEM)
     @Post(value = "/", produces = MediaType.APPLICATION_JSON, consumes = MediaType.APPLICATION_JSON)
-    Tenant saveTenant(@Body Tenant metadata) {
-        metadata.guid = UUID.randomUUID().toString()
-        tenantRepository.create(metadata)
+    Tenant saveTenant(@Body Tenant tenant) {
+        tenant.guid = UUID.randomUUID().toString()
+        tenantRepository.create(tenant)
     }
 
     @Tag(name = "Tenant Operations")
-    @Operation(summary = "Remove metadata from a metadata id **Secure")
+    @Operation(summary = "Remove tenant with tenant id **Secure")
     @Secure(Roles.USER)
     @Delete(value = "{id}", produces = MediaType.APPLICATION_JSON)
     Tenant removeTenant(String id) {
