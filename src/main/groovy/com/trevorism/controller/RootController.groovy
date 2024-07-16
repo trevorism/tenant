@@ -25,9 +25,9 @@ class RootController {
 
     @Tag(name = "Root Operations")
     @Get(produces = MediaType.TEXT_HTML)
-    HttpResponse<List<String>> index() {
+    HttpResponse<String> index() {
         log.info("Hit context root")
-        HttpResponse.ok(['<a href="/ping">/ping</a>', '<a href="/help">/help</a>', '<a href="/version">/version</a>'])
+        HttpResponse.ok(['<a href="/ping">/ping</a>', '<a href="/help">/help</a>', '<a href="/version">/version</a>'].toString())
     }
 
     @Tag(name = "Root Operations")
@@ -57,6 +57,6 @@ class RootController {
     )
     @Get(value = "/version", produces = MediaType.TEXT_PLAIN)
     String version() {
-        return "0-0-1"
+        return "0-2-0"
     }
 }

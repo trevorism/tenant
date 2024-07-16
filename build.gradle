@@ -1,5 +1,5 @@
 buildscript {
-    ext {
+    ext{
         creds = {
             username = findProperty("github.user") ?: System.getenv("GITHUB_ACTOR")
             password = findProperty("github.token") ?: System.getenv("GITHUB_TOKEN")
@@ -16,50 +16,50 @@ buildscript {
         }
     }
     dependencies {
-        classpath 'com.google.cloud.tools:appengine-gradle-plugin:2.4.5'
-        classpath 'com.trevorism:gradle-acceptance-plugin:2.3.1'
+        classpath 'com.google.cloud.tools:appengine-gradle-plugin:2.8.0'
+        classpath 'com.trevorism:gradle-acceptance-plugin:2.7.2'
     }
 }
 
 plugins {
-    id("groovy")
-    id("com.github.johnrengelman.shadow") version "8.1.1"
-    id("io.micronaut.application") version "3.7.8"
+    id "groovy"
+    id ("com.github.johnrengelman.shadow") version "8.1.1"
+    id ("io.micronaut.application") version "4.3.8"
+    id "jacoco"
 }
-
 
 apply plugin: 'com.google.cloud.tools.appengine'
 apply plugin: "com.trevorism.gradle.acceptance"
 
-group = "com.trevorism"
-
 repositories {
     mavenCentral()
     maven {
-        url uri("https://maven.pkg.github.com/trevorism/secure-http-utils")
+        url uri("https://maven.pkg.github.com/trevorism/secure-utils")
         credentials creds
     }
 }
 
 dependencies {
+    annotationProcessor("io.micronaut.validation:micronaut-validation-processor")
+
     implementation("io.micronaut.groovy:micronaut-runtime-groovy")
     implementation("io.micronaut:micronaut-jackson-databind")
     implementation("io.micronaut.security:micronaut-security")
-    implementation("io.micronaut:micronaut-validation")
+    runtimeOnly("org.yaml:snakeyaml")
 
     implementation("jakarta.annotation:jakarta.annotation-api")
-    implementation 'io.projectreactor:reactor-core:3.5.4'
+    implementation 'io.projectreactor:reactor-core:3.6.8'
 
     implementation("io.swagger.core.v3:swagger-annotations")
     compileOnly("io.micronaut.openapi:micronaut-openapi"){
         exclude module:"slf4j-nop"
     }
 
-    runtimeOnly("ch.qos.logback:logback-classic")
-    implementation 'org.slf4j:slf4j-simple:2.0.6'
-    implementation 'com.trevorism:micronaut-security-utils:0.9.3'
-    implementation 'com.trevorism:datastore-client:3.1.0'
+    runtimeOnly ("ch.qos.logback:logback-classic")
+    implementation ('com.trevorism:micronaut-utility-beans:1.6.0')
+    implementation ('com.trevorism:datastore-client:4.1.0')
 
+    testImplementation 'com.trevorism:test-result-events:0.3.0'
     acceptanceImplementation 'io.cucumber:cucumber-groovy:6.10.4'
 }
 
@@ -83,9 +83,26 @@ tasks.withType(GroovyCompile) {
 }
 
 appengine {
-    stage.artifact = "${buildDir}/libs/${project.name}-all.jar"
+    stage.artifact = layout.buildDirectory.file("libs/${project.name}-all.jar")
     deploy {
         projectId = "trevorism-auth"
-        version = "0-1-0"
+        version = "0-2-0"
+        stopPreviousVersion = true
+        promote = true
     }
 }
+
+test {
+    systemProperty ("trevorism.test.event", findProperty("trevorism.test.event") == "enabled" ? project.name : null)
+}
+
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            limit {
+                minimum = 0.4
+            }
+        }
+    }
+}
+build.dependsOn jacocoTestCoverageVerification

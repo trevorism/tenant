@@ -6,7 +6,7 @@ on:
       TEST_TYPE:
         required: false
         type: string
-        default: acceptance
+        default: cucumber
         description: Either 'unit' or 'cucumber' or 'cypress'
 
 permissions: write-all
