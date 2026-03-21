@@ -16,13 +16,13 @@ jobs:
     if: ${{inputs.TEST_TYPE == 'unit'}}
     uses: trevorism/actions-workflows/.github/workflows/build.yml@master
     with:
-      JDK_VERSION: 17
+      JDK_VERSION: 21
 
   call-accept:
     if: ${{inputs.TEST_TYPE == 'cucumber'}}
     uses: trevorism/actions-workflows/.github/workflows/accept.yml@master
     with:
-      JDK_VERSION: 17
+      JDK_VERSION: 21
 
   call-cypress:
     if: ${{inputs.TEST_TYPE == 'cypress'}}

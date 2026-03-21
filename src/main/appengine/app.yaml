@@ -1,4 +1,4 @@
-runtime: java17
+runtime: java21
 service: tenant
 entrypoint: java -jar tenant-all.jar
 handlers:
