@@ -1,0 +1,13 @@
+name: Build and test on pull requests
+
+on:
+  pull_request:
+    branches: [ master ]
+
+permissions: read-all
+
+jobs:
+  call-build:
+    uses: trevorism/actions-workflows/.github/workflows/build.yml@master
+    with:
+      JDK_VERSION: 25

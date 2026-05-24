@@ -9,7 +9,7 @@ import io.swagger.v3.oas.annotations.info.Info
 @OpenAPIDefinition(
         info = @Info(
                 title = "Tenant",
-                version = "0.3.0",
+                version = "0.4.0",
                 description = "API for management of tenants within Trevorism",
                 contact = @Contact(url = "https://trevorism.com", name = "Trevor Brooks", email = "tbrooks@trevorism.com")
         )

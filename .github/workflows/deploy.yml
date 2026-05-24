@@ -11,16 +11,16 @@ jobs:
   call-build:
     uses: trevorism/actions-workflows/.github/workflows/build.yml@master
     with:
-      JDK_VERSION: 21
+      JDK_VERSION: 25
 
   call-deploy:
     uses: trevorism/actions-workflows/.github/workflows/deploy.yml@master
     needs: [call-build]
     with:
-      JDK_VERSION: 21
+      JDK_VERSION: 25
       gcp_project: 'trevorism-auth'
       gcp_project_id: '20040999009'
-      version: '0-3-0'
+      version: '0-4-0'
     secrets:
       CLIENT_ID: ${{ secrets.CLIENT_ID }}
       CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
@@ -30,4 +30,4 @@ jobs:
     uses: trevorism/actions-workflows/.github/workflows/accept.yml@master
     needs: call-deploy
     with:
-      JDK_VERSION: 21
+      JDK_VERSION: 25
