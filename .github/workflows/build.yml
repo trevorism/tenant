@@ -2,9 +2,9 @@ name: Build and test on pull requests
 
 on:
   pull_request:
-    branches: [ master ]
+  workflow_dispatch:
 
-permissions: read-all
+permissions: write-all
 
 jobs:
   call-build:
