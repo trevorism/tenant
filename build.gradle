@@ -16,15 +16,15 @@ buildscript {
         }
     }
     dependencies {
-        classpath 'com.google.cloud.tools:appengine-gradle-plugin:2.8.3'
+        classpath 'com.google.cloud.tools:appengine-gradle-plugin:2.8.7'
         classpath 'com.trevorism:gradle-acceptance-plugin:2.8.2'
     }
 }
 
 plugins {
     id "groovy"
-    id("com.gradleup.shadow") version "8.3.8"
-    id("io.micronaut.application") version "4.6.2"
+    id("com.gradleup.shadow") version "9.4.1"
+    id("io.micronaut.application") version "5.0.0"
     id "jacoco"
 }
 
@@ -50,7 +50,7 @@ dependencies {
     runtimeOnly("org.yaml:snakeyaml")
 
     implementation("jakarta.annotation:jakarta.annotation-api")
-    implementation 'io.projectreactor:reactor-core:3.8.4'
+    implementation 'io.projectreactor:reactor-core:3.8.5'
 
     implementation("io.swagger.core.v3:swagger-annotations")
     compileOnly("io.micronaut.openapi:micronaut-openapi"){
@@ -88,7 +88,7 @@ appengine {
     stage.artifact = layout.buildDirectory.file("libs/${project.name}-all.jar")
     deploy {
         projectId = "trevorism-auth"
-        version = "0-3-0"
+        version = "0-4-0"
         stopPreviousVersion = true
         promote = true
     }
