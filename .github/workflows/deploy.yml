@@ -3,31 +3,23 @@ name: Deploy tested project to GCP
 on:
   push:
     branches: [ master ]
+  pull_request:
+    branches: [ master ]
+    types: [ opened, synchronize, reopened, closed ]
   workflow_dispatch:
 
-permissions: write-all
+permissions:
+  contents: read
+  packages: read
+  id-token: write
+  checks: write
+  pull-requests: write
 
 jobs:
-  call-build:
-    uses: trevorism/actions-workflows/.github/workflows/build.yml@master
+  pipeline:
+    uses: trevorism/actions-workflows/.github/workflows/pipeline.yml@master
     with:
-      JDK_VERSION: 25
-
-  call-deploy:
-    uses: trevorism/actions-workflows/.github/workflows/deploy.yml@master
-    needs: [call-build]
-    with:
-      JDK_VERSION: 25
       gcp_project: 'trevorism-auth'
       gcp_project_id: '20040999009'
       version: '0-4-0'
-    secrets:
-      CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
-      SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
-
-  call-accept-after:
-    uses: trevorism/actions-workflows/.github/workflows/accept.yml@master
-    needs: call-deploy
-    with:
-      JDK_VERSION: 25
+    secrets: inherit
