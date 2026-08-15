@@ -3,6 +3,8 @@ package com.trevorism.controller
 import com.trevorism.data.Repository
 import com.trevorism.data.model.filtering.SimpleFilter
 import com.trevorism.model.Tenant
+import io.micronaut.http.HttpResponse
+import io.micronaut.http.HttpStatus
 import io.micronaut.security.authentication.Authentication
 import org.junit.jupiter.api.Test
 
@@ -27,44 +29,45 @@ class TenantControllerTest {
             [expected]
         }] as Repository)
 
-        Tenant actual = controller.getCurrentTenant(authentication([tenant: "guid-abc"]))
+        HttpResponse<Tenant> actual = controller.getCurrentTenant(authentication([tenant: "guid-abc"]))
 
-        assert actual.is(expected)
+        assert actual.status == HttpStatus.OK
+        assert actual.body().is(expected)
         assert captured.field == "guid"
         assert captured.value == "guid-abc"
     }
 
     @Test
-    void testGetCurrentTenantReturnsNullWhenCallerHasNoTenantClaim() {
+    void testGetCurrentTenantReturnsNoContentWhenCallerHasNoTenantClaim() {
         boolean queried = false
         TenantController controller = controllerWith([filter: { SimpleFilter filter ->
             queried = true
             []
         }] as Repository)
 
-        assert controller.getCurrentTenant(authentication([:])) == null
+        assert controller.getCurrentTenant(authentication([:])).status == HttpStatus.NO_CONTENT
         assert !queried
     }
 
     @Test
-    void testGetCurrentTenantReturnsNullWhenClaimIsBlank() {
+    void testGetCurrentTenantReturnsNoContentWhenClaimIsBlank() {
         TenantController controller = controllerWith([filter: { SimpleFilter filter -> [] }] as Repository)
 
-        assert controller.getCurrentTenant(authentication([tenant: ""])) == null
+        assert controller.getCurrentTenant(authentication([tenant: ""])).status == HttpStatus.NO_CONTENT
     }
 
     @Test
-    void testGetCurrentTenantReturnsNullWhenNoTenantMatchesTheClaim() {
+    void testGetCurrentTenantReturnsNotFoundWhenNoTenantMatchesTheClaim() {
         TenantController controller = controllerWith([filter: { SimpleFilter filter -> [] }] as Repository)
 
-        assert controller.getCurrentTenant(authentication([tenant: "missing"])) == null
+        assert controller.getCurrentTenant(authentication([tenant: "missing"])).status == HttpStatus.NOT_FOUND
     }
 
     @Test
-    void testGetCurrentTenantReturnsNullWhenUnauthenticated() {
+    void testGetCurrentTenantReturnsNoContentWhenUnauthenticated() {
         TenantController controller = controllerWith([filter: { SimpleFilter filter -> [] }] as Repository)
 
-        assert controller.getCurrentTenant(null) == null
+        assert controller.getCurrentTenant(null).status == HttpStatus.NO_CONTENT
     }
 
     @Test

@@ -7,6 +7,7 @@ import com.trevorism.data.model.filtering.SimpleFilter
 import com.trevorism.model.Tenant
 import com.trevorism.secure.Roles
 import com.trevorism.secure.Secure
+import io.micronaut.http.HttpResponse
 import io.micronaut.http.HttpStatus
 import io.micronaut.http.MediaType
 import io.micronaut.http.annotation.Body
@@ -39,12 +40,13 @@ class TenantController {
     @Operation(summary = "Gets the tenant of the current caller **Secure")
     @Secure(Roles.USER)
     @Get(value = "/me", produces = MediaType.APPLICATION_JSON)
-    Tenant getCurrentTenant(Authentication authentication) {
+    HttpResponse<Tenant> getCurrentTenant(Authentication authentication) {
         String guid = authentication?.attributes?.get(TENANT_CLAIM)
         if (!guid) {
-            return null
+            return HttpResponse.noContent()
         }
-        return tenantRepository.filter(new SimpleFilter(GUID_FIELD, FilterConstants.OPERATOR_EQUAL, guid))[0]
+        def list = tenantRepository.filter(new SimpleFilter(GUID_FIELD, FilterConstants.OPERATOR_EQUAL, guid))
+        return list ? HttpResponse.ok(list[0]) : HttpResponse.notFound()
     }
 
     @Tag(name = "Tenant Operations")
