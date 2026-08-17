@@ -1,3 +1,7 @@
+## 0.6.0
+
+Tie tenant creation to billing.
+
 ## 0.5.0
 
 Include versioning plugin, add a /me endpoint.
