@@ -1,0 +1,20 @@
+package com.trevorism.model
+
+class TenantRequest {
+
+    String id
+    String name
+    String domain
+    String status
+
+    String ownerUserId
+    String ownerUsername
+    String ownerEmail
+
+    String tenantGuid
+    String billingCustomerId
+    String subscriptionId
+
+    Date dateCreated
+    Date dateProvisioned
+}
