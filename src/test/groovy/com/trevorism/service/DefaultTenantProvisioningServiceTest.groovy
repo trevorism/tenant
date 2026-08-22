@@ -531,6 +531,40 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
+    void testAFederatedSignInIsToldToUseATrevorismAccount() {
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        TenantRequestException e = assertThrows(TenantRequestException) {
+            service.requestTenant(new TenantRequestInput(name: "Acme", domain: "acme.com"), oauthAuth("GOOGLE"))
+        }
+
+        assert e.message.contains("GOOGLE")
+        assert e.message.contains("Trevorism username and password")
+    }
+
+    @Test
+    void testReadingTheCurrentRequestFromAFederatedSignInIsRefusedClearly() {
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        TenantRequestException e = assertThrows(TenantRequestException) {
+            service.getRequestForCaller(oauthAuth("GOOGLE"))
+        }
+
+        assert e.message.contains("GOOGLE")
+    }
+
+    @Test
+    void testAnUnidentifiableCallerStillGetsTheGenericRefusal() {
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        TenantRequestException e = assertThrows(TenantRequestException) {
+            service.getRequestForCaller(auth(null))
+        }
+
+        assert e.message == "Unable to identify the requesting user"
+    }
+
+    @Test
     void testGetRequestForCallerReturnsNothingWhenTheCallerHasNoRequests() {
         def service = buildService(requestRepository([]), tenantRepository([]))
 
@@ -729,6 +763,12 @@ class DefaultTenantProvisioningServiceTest {
 
     private static Authentication auth(String id) {
         [getName: { "caller" }, getRoles: { ["user"] }, getAttributes: { [id: id] }] as Authentication
+    }
+
+    private static Authentication oauthAuth(String provider) {
+        [getName      : { "caller@example.com" },
+         getRoles     : { ["Oauth2"] },
+         getAttributes: { [email: "caller@example.com", provider: provider, permissions: "R"] }] as Authentication
     }
 
     private DefaultTenantProvisioningService buildService(Repository<TenantRequest> requests, Repository<Tenant> tenants) {
