@@ -137,7 +137,7 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
 
     @Override
     TenantRequest deleteRequest(String requestId) {
-        TenantRequest request = requestId ? tenantRequestRepository.get(requestId) : null
+        TenantRequest request = findRequest(requestId)
         if (!request) {
             throw new TenantRequestException("Unable to locate tenant request ${requestId}")
         }
@@ -304,13 +304,29 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
     }
 
     private AuthenticatedUser fetchCallerIdentity() {
-        String json = passThruHttpClient.get("${AUTH_BASE_URL}/user/me")
-        return gson.fromJson(json, AuthenticatedUser)
+        try {
+            return gson.fromJson(passThruHttpClient.get("${AUTH_BASE_URL}/user/me"), AuthenticatedUser)
+        } catch (Exception e) {
+            log.warn("Unable to read the caller's account details: ${e.message}")
+            return null
+        }
+    }
+
+    private TenantRequest findRequest(String requestId) {
+        if (!requestId) {
+            return null
+        }
+        try {
+            return tenantRequestRepository.get(requestId)
+        } catch (Exception e) {
+            log.warn("Unable to read tenant request ${requestId}: ${e.message}")
+            return null
+        }
     }
 
     private TenantRequest requireOwnedRequest(String requestId, Authentication authentication) {
         String ownerUserId = callerId(authentication)
-        TenantRequest request = requestId ? tenantRequestRepository.get(requestId) : null
+        TenantRequest request = findRequest(requestId)
         if (!request || request.ownerUserId != ownerUserId) {
             throw new TenantRequestException("Unable to locate tenant request ${requestId}")
         }

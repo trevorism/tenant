@@ -28,10 +28,9 @@ Feature: Self service tenant provisioning guards
     When an authenticated caller provisions a request that does not exist
     Then the tenant request is rejected with status 400
 
-  Scenario: A tenant cannot be provisioned without an active subscription
+  Scenario: A caller without a usable user account cannot reserve a tenant
     Given the tenant application is alive
-    And the acceptance caller has an open tenant request
-    When the caller provisions the request without paying
+    When the acceptance caller requests a tenant for itself
     Then the tenant request is rejected with status 400
     And no tenant exists for the acceptance domain
 

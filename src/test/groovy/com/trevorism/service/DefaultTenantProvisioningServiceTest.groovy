@@ -378,6 +378,42 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
+    void testProvisionReportsAMissingRequestWhenTheLookupBlowsUp() {
+        def service = buildService(throwingRequestRepository(), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.provision("zz-no-such-request", auth(OWNER_ID))
+        }
+    }
+
+    @Test
+    void testCreateCheckoutSessionReportsAMissingRequestWhenTheLookupBlowsUp() {
+        def service = buildService(throwingRequestRepository(), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.createCheckoutSession("zz-no-such-request", auth(OWNER_ID))
+        }
+    }
+
+    @Test
+    void testDeleteRequestReportsAMissingRequestWhenTheLookupBlowsUp() {
+        def service = buildService(throwingRequestRepository(), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.deleteRequest("zz-no-such-request")
+        }
+    }
+
+    @Test
+    void testRequestTenantReportsABadRequestWhenTheAccountLookupFails() {
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.requestTenant(new TenantRequestInput(name: "Acme", domain: "acme.com"), auth(OWNER_ID))
+        }
+    }
+
+    @Test
     void testGetRequestForCallerReturnsNothingWhenTheCallerHasNoRequests() {
         def service = buildService(requestRepository([]), tenantRepository([]))
 
@@ -601,6 +637,17 @@ class DefaultTenantProvisioningServiceTest {
                     deleted << id
                     return stored.find { it.id == id }
                 }
+        ] as Repository
+    }
+
+    private static Repository<TenantRequest> throwingRequestRepository() {
+        return [
+                list  : { [] },
+                get   : { String id -> throw new RuntimeException("Unable to HTTP GET: /object/tenantRequest/${id}") },
+                filter: { SimpleFilter filter -> [] },
+                create: { TenantRequest request -> request },
+                update: { String id, TenantRequest request -> request },
+                delete: { String id -> null }
         ] as Repository
     }
 

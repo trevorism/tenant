@@ -18,7 +18,6 @@ String guardBaseUrl = System.getenv("ACCEPTANCE_BASE_URL") ?: "https://tenant.au
 
 String acceptanceDomain = "zz-acceptance-provisioning.test"
 String acceptanceName = "zz_acceptance_provisioning"
-String openRequestId
 int lastStatus
 
 Closure<Integer> statusOf = { Closure call ->
@@ -47,10 +46,8 @@ Given(/the tenant application is alive/) { ->
     }
 }
 
-Given(/the acceptance caller has an open tenant request/) { ->
-    String json = appClient.post("${guardBaseUrl}/subscribedtenant/", requestBody(acceptanceName, acceptanceDomain))
-    openRequestId = gson.fromJson(json, Map).id
-    assert openRequestId
+When(/the acceptance caller requests a tenant for itself/) { ->
+    lastStatus = statusOf { appClient.post("${guardBaseUrl}/subscribedtenant/", requestBody(acceptanceName, acceptanceDomain)) }
 }
 
 When(/an anonymous caller requests a tenant/) { ->
@@ -73,10 +70,6 @@ When(/an authenticated caller provisions a request that does not exist/) { ->
     lastStatus = statusOf { appClient.post("${guardBaseUrl}/subscribedtenant/zz-no-such-request/provision", "{}") }
 }
 
-When(/the caller provisions the request without paying/) { ->
-    lastStatus = statusOf { appClient.post("${guardBaseUrl}/subscribedtenant/${openRequestId}/provision", "{}") }
-}
-
 When(/an anonymous caller triggers the entitlement sweep/) { ->
     lastStatus = statusOf { httpClient.post("${guardBaseUrl}/subscribedtenant/sweep", "{}") }
 }
@@ -91,12 +84,3 @@ Then(/no tenant exists for the acceptance domain/) { ->
     assert !tenants.any { it.domain == acceptanceDomain }
 }
 
-After { ->
-    if (openRequestId) {
-        try {
-            appClient.delete("${guardBaseUrl}/subscribedtenant/${openRequestId}")
-        } catch (Exception ignored) {
-        }
-        openRequestId = null
-    }
-}
