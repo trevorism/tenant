@@ -36,6 +36,7 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
     static final double MONTHLY_PRICE_DOLLARS = 10.00d
     static final String TENANT_ADMIN_PERMISSIONS = "CRUDE"
     static final String ID_CLAIM = "id"
+    static final String PROVIDER_CLAIM = "provider"
     static final String OWNER_FIELD = "ownerUserId"
     static final String ENTITLEMENT_FIELD = "entitlementId"
     static final String GUID_FIELD = "guid"
@@ -381,9 +382,14 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
 
     private static String callerId(Authentication authentication) {
         String ownerUserId = authentication?.attributes?.get(ID_CLAIM)
-        if (!ownerUserId) {
-            throw new TenantRequestException("Unable to identify the requesting user")
+        if (ownerUserId) {
+            return ownerUserId
         }
-        return ownerUserId
+
+        String provider = authentication?.attributes?.get(PROVIDER_CLAIM)
+        if (provider) {
+            throw new TenantRequestException("A tenant cannot be created from a ${provider} sign in; sign in with your Trevorism username and password instead")
+        }
+        throw new TenantRequestException("Unable to identify the requesting user")
     }
 }
