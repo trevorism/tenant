@@ -3,8 +3,14 @@ package com.trevorism.service
 import com.google.gson.Gson
 import com.trevorism.data.Repository
 import com.trevorism.data.model.filtering.SimpleFilter
+import com.trevorism.entitlement.Checkout
+import com.trevorism.entitlement.CheckoutRequest
+import com.trevorism.entitlement.Entitlement
+import com.trevorism.entitlement.EntitlementState
+import com.trevorism.entitlement.TenantEntitlementProvider
 import com.trevorism.https.SecureHttpClient
 import com.trevorism.model.Tenant
+import com.trevorism.model.TenantBillingMode
 import com.trevorism.model.TenantRequest
 import com.trevorism.model.TenantRequestInput
 import com.trevorism.model.TenantRequestStatus
@@ -16,15 +22,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows
 class DefaultTenantProvisioningServiceTest {
 
     private static final String OWNER_ID = "user-1"
+    private static final String PROVIDER = "STRIPE"
     private static final String USER_ME_URL = "https://auth.trevorism.com/user/me"
-    private static final String SUBSCRIPTION_URL = "https://stripe.trade.trevorism.com/api/subscription"
-    private static final String SESSION_URL = "https://stripe.trade.trevorism.com/api/subscription/session"
 
     private Gson gson = new Gson()
     private List<Map> appPosts = []
-    private List<Map> passThruPosts = []
-    private Map<String, String> appGets = [:]
     private Map<String, String> passThruGets = [:]
+    private Map<String, Object> entitlementOverrides = [:]
 
     @Test
     void testRequestTenantPersistsAPendingRequestWithOwnerDetails() {
@@ -45,6 +49,7 @@ class DefaultTenantProvisioningServiceTest {
         assert created.ownerEmail == "trevor@example.com"
         assert created.dateCreated
         assert !created.tenantGuid
+        assert !created.billingProvider
     }
 
     @Test
@@ -96,19 +101,22 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
-    void testCreateCheckoutSessionAsksStripeForTheTenDollarPlan() {
-        TenantRequest owned = pendingRequest()
-        def service = buildService(requestRepository([owned]), tenantRepository([]))
+    void testCreateCheckoutSessionAsksTheProviderForTheTenDollarPlan() {
+        CheckoutRequest captured = null
+        entitlementOverrides.startCheckout = { CheckoutRequest r, Authentication a ->
+            captured = r
+            new Checkout(id: "cs_test_123", url: "https://checkout.example/cs_test_123")
+        }
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
 
         Map session = service.createCheckoutSession("req-1", auth(OWNER_ID))
 
         assert session.id == "cs_test_123"
-        Map posted = passThruPosts.find { it.url == SESSION_URL }
-        Map body = gson.fromJson(posted.body as String, Map)
-        assert body.dollars == 10.0d
-        assert body.name == "Trevorism Tenant: Acme"
-        assert body.successCallbackUrl == "https://trevorism.com/tenant?request=req-1&status=success"
-        assert body.failureCallbackUrl == "https://trevorism.com/tenant?request=req-1&status=cancelled"
+        assert session.url == "https://checkout.example/cs_test_123"
+        assert captured.monthlyPriceDollars == 10.0d
+        assert captured.planName == "Trevorism Tenant: Acme"
+        assert captured.successUrl == "https://trevorism.com/tenant?request=req-1&status=success"
+        assert captured.cancelUrl == "https://trevorism.com/tenant?request=req-1&status=cancelled"
     }
 
     @Test
@@ -130,8 +138,32 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
-    void testProvisionRequiresAnActiveSubscription() {
-        passThruGets[SUBSCRIPTION_URL] = '{"customerId":"cus_1","subscriptionId":"sub_1","active":false}'
+    void testProvisionRequiresAnActiveEntitlement() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.inactive(PROVIDER, "cus_1") }
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.provision("req-1", auth(OWNER_ID))
+        }
+        assert appPosts.isEmpty()
+    }
+
+    @Test
+    void testProvisionTreatsAnUndeterminedEntitlementAsUnpaid() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.unknown(PROVIDER) }
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.provision("req-1", auth(OWNER_ID))
+        }
+        assert appPosts.isEmpty()
+    }
+
+    @Test
+    void testProvisionRejectsAnEntitlementWithoutABillingReference() {
+        entitlementOverrides.forCaller = { Authentication a ->
+            new Entitlement(provider: PROVIDER, entitlementId: "sub_1", state: EntitlementState.ACTIVE)
+        }
         def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
 
         assertThrows(TenantRequestException) {
@@ -142,7 +174,8 @@ class DefaultTenantProvisioningServiceTest {
 
     @Test
     void testProvisionCreatesTheTenantAndPromotesTheOwnerToTenantAdmin() {
-        passThruGets[SUBSCRIPTION_URL] = '{"customerId":"cus_1","subscriptionId":"sub_1","active":true}'
+        Date renewal = new Date()
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", renewal) }
         TenantRequest owned = pendingRequest()
         Tenant createdTenant = null
         TenantRequest updated = null
@@ -154,6 +187,7 @@ class DefaultTenantProvisioningServiceTest {
 
         assert createdTenant.name == "Acme"
         assert createdTenant.domain == "acme.com"
+        assert createdTenant.billingMode == TenantBillingMode.SUBSCRIPTION
         assert UUID.fromString(createdTenant.guid)
 
         Map registration = gson.fromJson(appPosts[0].body as String, Map)
@@ -174,8 +208,10 @@ class DefaultTenantProvisioningServiceTest {
 
         assert result.status == TenantRequestStatus.PROVISIONED
         assert updated.tenantGuid == createdTenant.guid
-        assert updated.billingCustomerId == "cus_1"
-        assert updated.subscriptionId == "sub_1"
+        assert updated.billingProvider == PROVIDER
+        assert updated.billingReference == "cus_1"
+        assert updated.entitlementId == "sub_1"
+        assert updated.paidThrough == renewal
         assert updated.dateProvisioned
     }
 
@@ -190,11 +226,10 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
-    void testProvisionRejectsASubscriptionThatAlreadyFundsAnotherTenant() {
-        passThruGets[SUBSCRIPTION_URL] = '{"customerId":"cus_1","subscriptionId":"sub_1","active":true}'
-        TenantRequest owned = pendingRequest()
-        TenantRequest other = new TenantRequest(id: "req-2", subscriptionId: "sub_1", status: TenantRequestStatus.PROVISIONED)
-        def service = buildService(requestRepository([owned, other]), tenantRepository([]))
+    void testProvisionRejectsAnEntitlementThatAlreadyFundsAnotherTenant() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        TenantRequest other = new TenantRequest(id: "req-2", entitlementId: "sub_1", status: TenantRequestStatus.PROVISIONED)
+        def service = buildService(requestRepository([pendingRequest(), other]), tenantRepository([]))
 
         assertThrows(TenantRequestException) {
             service.provision("req-1", auth(OWNER_ID))
@@ -203,37 +238,64 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
-    void testProvisionRejectsASubscriptionWhoseEarlierTenantIsMerelySuspended() {
-        passThruGets[SUBSCRIPTION_URL] = '{"customerId":"cus_1","subscriptionId":"sub_1","active":true}'
-        TenantRequest owned = pendingRequest()
-        TenantRequest other = new TenantRequest(id: "req-2", subscriptionId: "sub_1", status: TenantRequestStatus.SUSPENDED)
-        def service = buildService(requestRepository([owned, other]), tenantRepository([]))
+    void testProvisionRejectsAnEntitlementWhoseEarlierTenantIsMerelySuspended() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        TenantRequest other = new TenantRequest(id: "req-2", entitlementId: "sub_1", status: TenantRequestStatus.SUSPENDED)
+        def service = buildService(requestRepository([pendingRequest(), other]), tenantRepository([]))
 
         assertThrows(TenantRequestException) {
             service.provision("req-1", auth(OWNER_ID))
         }
         assert appPosts.isEmpty()
+    }
+
+    @Test
+    void testDeleteRequestRemovesAnAbandonedRequest() {
+        List<String> deleted = []
+        def service = buildService(requestRepository([pendingRequest()], null, null, deleted), tenantRepository([]))
+
+        service.deleteRequest("req-1")
+
+        assert deleted == ["req-1"]
+    }
+
+    @Test
+    void testDeleteRequestRefusesToOrphanAProvisionedTenant() {
+        List<String> deleted = []
+        def service = buildService(requestRepository([provisionedRequest()], null, null, deleted), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.deleteRequest("req-1")
+        }
+        assert deleted.isEmpty()
+    }
+
+    @Test
+    void testDeleteRequestRejectsAnUnknownRequest() {
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.deleteRequest("missing")
+        }
     }
 
     @Test
     void testSynchronizeEntitlementsSuspendsALapsedTenant() {
-        appGets["https://stripe.trade.trevorism.com/api/subscription/customer/cus_1"] =
-                '{"customerId":"cus_1","active":false}'
-        TenantRequest provisioned = provisionedRequest()
+        entitlementOverrides.forReference = { String reference -> Entitlement.inactive(PROVIDER, reference) }
         TenantRequest updated = null
         def service = buildService(
-                requestRepository([provisioned], null, { String id, TenantRequest r -> updated = r; r }),
+                requestRepository([provisionedRequest()], null, { String id, TenantRequest r -> updated = r; r }),
                 tenantRepository([]))
 
-        assert service.synchronizeEntitlements() == 1
+        assert service.synchronizeEntitlements().updated == 1
         assert appPosts[0].url == "https://auth.trevorism.com/user/deactivate"
         assert updated.status == TenantRequestStatus.SUSPENDED
     }
 
     @Test
     void testSynchronizeEntitlementsRestoresARenewedTenant() {
-        appGets["https://stripe.trade.trevorism.com/api/subscription/customer/cus_1"] =
-                '{"customerId":"cus_1","active":true}'
+        Date renewal = new Date()
+        entitlementOverrides.forReference = { String reference -> Entitlement.active(PROVIDER, reference, "sub_1", renewal) }
         TenantRequest suspended = provisionedRequest()
         suspended.status = TenantRequestStatus.SUSPENDED
         TenantRequest updated = null
@@ -241,38 +303,75 @@ class DefaultTenantProvisioningServiceTest {
                 requestRepository([suspended], null, { String id, TenantRequest r -> updated = r; r }),
                 tenantRepository([]))
 
-        assert service.synchronizeEntitlements() == 1
+        assert service.synchronizeEntitlements().updated == 1
         Map activation = gson.fromJson(appPosts[0].body as String, Map)
         assert appPosts[0].url == "https://auth.trevorism.com/user/activate"
         assert activation.isAdmin
         assert updated.status == TenantRequestStatus.PROVISIONED
+        assert updated.paidThrough == renewal
     }
 
     @Test
     void testSynchronizeEntitlementsLeavesAHealthyTenantAlone() {
-        appGets["https://stripe.trade.trevorism.com/api/subscription/customer/cus_1"] =
-                '{"customerId":"cus_1","active":true}'
+        entitlementOverrides.forReference = { String reference -> Entitlement.active(PROVIDER, reference, "sub_1", null) }
         def service = buildService(requestRepository([provisionedRequest()]), tenantRepository([]))
 
-        assert service.synchronizeEntitlements() == 0
+        assert service.synchronizeEntitlements().updated == 0
         assert appPosts.isEmpty()
     }
 
     @Test
-    void testSynchronizeEntitlementsSkipsWhenSubscriptionStateCannotBeRead() {
+    void testSynchronizeEntitlementsSkipsWhenEntitlementStateCannotBeRead() {
         TenantRequest provisioned = provisionedRequest()
         def service = buildService(requestRepository([provisioned]), tenantRepository([]))
 
-        assert service.synchronizeEntitlements() == 0
+        assert service.synchronizeEntitlements().updated == 0
         assert appPosts.isEmpty()
         assert provisioned.status == TenantRequestStatus.PROVISIONED
+    }
+
+    @Test
+    void testSynchronizeEntitlementsNeverTouchesUnbilledTenants() {
+        Tenant personalProject = new Tenant(id: "t-1", name: "Sandbox", domain: "sandbox.test",
+                guid: "guid-unbilled", billingMode: TenantBillingMode.UNBILLED)
+        Tenant legacyTenant = new Tenant(id: "t-2", name: "Legacy", domain: "legacy.test", guid: "guid-legacy")
+        def service = buildService(requestRepository([]), tenantRepository([personalProject, legacyTenant]))
+
+        Map result = service.synchronizeEntitlements()
+
+        assert result.reviewed == 0
+        assert result.updated == 0
+        assert result.unmanaged == 0
+        assert appPosts.isEmpty()
+    }
+
+    @Test
+    void testSynchronizeEntitlementsReportsASubscriptionTenantWithNoBackingRequest() {
+        Tenant orphan = new Tenant(id: "t-3", name: "Orphan", domain: "orphan.test",
+                guid: "guid-orphan", billingMode: TenantBillingMode.SUBSCRIPTION)
+        def service = buildService(requestRepository([]), tenantRepository([orphan]))
+
+        assert service.synchronizeEntitlements().unmanaged == 1
+    }
+
+    @Test
+    void testSynchronizeEntitlementsDoesNotReportATrackedSubscriptionTenant() {
+        entitlementOverrides.forReference = { String reference -> Entitlement.active(PROVIDER, reference, "sub_1", null) }
+        Tenant tracked = new Tenant(id: "t-4", name: "Acme", domain: "acme.com",
+                guid: "guid-1", billingMode: TenantBillingMode.SUBSCRIPTION)
+        def service = buildService(requestRepository([provisionedRequest()]), tenantRepository([tracked]))
+
+        Map result = service.synchronizeEntitlements()
+
+        assert result.reviewed == 1
+        assert result.unmanaged == 0
     }
 
     @Test
     void testSynchronizeEntitlementsIgnoresRequestsAwaitingPayment() {
         def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
 
-        assert service.synchronizeEntitlements() == 0
+        assert service.synchronizeEntitlements().updated == 0
         assert appPosts.isEmpty()
     }
 
@@ -286,8 +385,9 @@ class DefaultTenantProvisioningServiceTest {
         TenantRequest request = pendingRequest()
         request.status = TenantRequestStatus.PROVISIONED
         request.tenantGuid = "guid-1"
-        request.billingCustomerId = "cus_1"
-        request.subscriptionId = "sub_1"
+        request.billingProvider = PROVIDER
+        request.billingReference = "cus_1"
+        request.entitlementId = "sub_1"
         request.dateProvisioned = new Date()
         return request
     }
@@ -298,13 +398,23 @@ class DefaultTenantProvisioningServiceTest {
 
     private DefaultTenantProvisioningService buildService(Repository<TenantRequest> requests, Repository<Tenant> tenants) {
         DefaultTenantProvisioningService service = new DefaultTenantProvisioningService(
-                stubClient(passThruGets, passThruPosts), stubClient(appGets, appPosts))
+                stubClient(passThruGets, []), stubClient([:], appPosts), stubEntitlementProvider())
         service.tenantRequestRepository = requests
         service.tenantRepository = tenants
         return service
     }
 
-    private SecureHttpClient stubClient(Map<String, String> gets, List<Map> posts) {
+    private TenantEntitlementProvider stubEntitlementProvider() {
+        Map behaviour = [
+                getName      : { PROVIDER },
+                startCheckout: { CheckoutRequest r, Authentication a -> new Checkout(id: "cs_test_123", url: "https://checkout.example/cs_test_123") },
+                forCaller    : { Authentication a -> Entitlement.unknown(PROVIDER) },
+                forReference : { String reference -> Entitlement.unknown(PROVIDER) }
+        ]
+        return (behaviour + entitlementOverrides) as TenantEntitlementProvider
+    }
+
+    private static SecureHttpClient stubClient(Map<String, String> gets, List<Map> posts) {
         return [
                 get : { String url ->
                     if (!gets.containsKey(url)) {
@@ -314,20 +424,25 @@ class DefaultTenantProvisioningServiceTest {
                 },
                 post: { String url, String body ->
                     posts << [url: url, body: body]
-                    return url == SESSION_URL ? '{"id":"cs_test_123","url":"https://checkout.stripe.com/c/pay/cs_test_123"}' : "{}"
+                    return "{}"
                 }
         ] as SecureHttpClient
     }
 
     private static Repository<TenantRequest> requestRepository(List<TenantRequest> stored,
                                                                Closure<TenantRequest> onCreate = null,
-                                                               Closure<TenantRequest> onUpdate = null) {
+                                                               Closure<TenantRequest> onUpdate = null,
+                                                               List<String> deleted = []) {
         return [
                 list  : { stored },
                 get   : { String id -> stored.find { it.id == id } },
                 filter: { SimpleFilter filter -> stored.findAll { it[filter.field] == filter.value } },
                 create: { TenantRequest request -> onCreate ? onCreate.call(request) : request },
-                update: { String id, TenantRequest request -> onUpdate ? onUpdate.call(id, request) : request }
+                update: { String id, TenantRequest request -> onUpdate ? onUpdate.call(id, request) : request },
+                delete: { String id ->
+                    deleted << id
+                    return stored.find { it.id == id }
+                }
         ] as Repository
     }
 

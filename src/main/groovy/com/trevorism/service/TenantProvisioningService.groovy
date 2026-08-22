@@ -10,5 +10,6 @@ interface TenantProvisioningService {
     TenantRequest getRequestForCaller(Authentication authentication)
     Map createCheckoutSession(String requestId, Authentication authentication)
     TenantRequest provision(String requestId, Authentication authentication)
-    int synchronizeEntitlements()
+    TenantRequest deleteRequest(String requestId)
+    Map synchronizeEntitlements()
 }

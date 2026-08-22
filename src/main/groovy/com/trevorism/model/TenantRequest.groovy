@@ -12,8 +12,10 @@ class TenantRequest {
     String ownerEmail
 
     String tenantGuid
-    String billingCustomerId
-    String subscriptionId
+    String billingProvider
+    String billingReference
+    String entitlementId
+    Date paidThrough
 
     Date dateCreated
     Date dateProvisioned

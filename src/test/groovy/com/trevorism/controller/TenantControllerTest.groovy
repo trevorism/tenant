@@ -3,6 +3,7 @@ package com.trevorism.controller
 import com.trevorism.data.Repository
 import com.trevorism.data.model.filtering.SimpleFilter
 import com.trevorism.model.Tenant
+import com.trevorism.model.TenantBillingMode
 import io.micronaut.http.HttpResponse
 import io.micronaut.http.HttpStatus
 import io.micronaut.security.authentication.Authentication
@@ -98,6 +99,19 @@ class TenantControllerTest {
 
         assert created.guid != "attacker-supplied"
         assert UUID.fromString(created.guid)
+    }
+
+    @Test
+    void testSaveTenantAlwaysCreatesAnUnbilledTenant() {
+        Tenant created = null
+        TenantController controller = controllerWith([create: { Tenant tenant ->
+            created = tenant
+            tenant
+        }] as Repository)
+
+        controller.saveTenant(new Tenant(name: "Sandbox", domain: "sandbox.test", billingMode: "SUBSCRIPTION"))
+
+        assert created.billingMode == TenantBillingMode.UNBILLED
     }
 
     @Test

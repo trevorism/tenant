@@ -10,12 +10,12 @@ import io.micronaut.http.exceptions.HttpStatusException
 import io.micronaut.security.authentication.Authentication
 import org.junit.jupiter.api.Test
 
-class TenantRequestControllerTest {
+class SubscribedTenantControllerTest {
 
     @Test
     void testRequestTenantDelegatesToTheService() {
         TenantRequest expected = new TenantRequest(id: "req-1", status: TenantRequestStatus.PENDING_PAYMENT)
-        TenantRequestController controller = controllerWith([
+        SubscribedTenantController controller = controllerWith([
                 requestTenant: { TenantRequestInput input, Authentication auth -> expected }
         ])
 
@@ -24,7 +24,7 @@ class TenantRequestControllerTest {
 
     @Test
     void testRequestTenantTranslatesValidationFailureToBadRequest() {
-        TenantRequestController controller = controllerWith([
+        SubscribedTenantController controller = controllerWith([
                 requestTenant: { TenantRequestInput input, Authentication auth ->
                     throw new TenantRequestException("Domain acme.com is reserved")
                 }
@@ -41,7 +41,7 @@ class TenantRequestControllerTest {
 
     @Test
     void testGetCurrentRequestReturnsNoContentWhenTheCallerHasNone() {
-        TenantRequestController controller = controllerWith([getRequestForCaller: { Authentication auth -> null }])
+        SubscribedTenantController controller = controllerWith([getRequestForCaller: { Authentication auth -> null }])
 
         assert controller.getCurrentRequest(authentication()).status == HttpStatus.NO_CONTENT
     }
@@ -49,7 +49,7 @@ class TenantRequestControllerTest {
     @Test
     void testGetCurrentRequestReturnsTheOwnedRequest() {
         TenantRequest expected = new TenantRequest(id: "req-1")
-        TenantRequestController controller = controllerWith([getRequestForCaller: { Authentication auth -> expected }])
+        SubscribedTenantController controller = controllerWith([getRequestForCaller: { Authentication auth -> expected }])
 
         def response = controller.getCurrentRequest(authentication())
 
@@ -59,7 +59,7 @@ class TenantRequestControllerTest {
 
     @Test
     void testCreateCheckoutSessionReturnsTheStripeSession() {
-        TenantRequestController controller = controllerWith([
+        SubscribedTenantController controller = controllerWith([
                 createCheckoutSession: { String requestId, Authentication auth -> [id: "cs_test_123"] }
         ])
 
@@ -69,7 +69,7 @@ class TenantRequestControllerTest {
     @Test
     void testProvisionReturnsTheProvisionedRequest() {
         TenantRequest expected = new TenantRequest(id: "req-1", status: TenantRequestStatus.PROVISIONED, tenantGuid: "guid-1")
-        TenantRequestController controller = controllerWith([
+        SubscribedTenantController controller = controllerWith([
                 provision: { String requestId, Authentication auth -> expected }
         ])
 
@@ -78,7 +78,7 @@ class TenantRequestControllerTest {
 
     @Test
     void testProvisionTranslatesAMissingSubscriptionToBadRequest() {
-        TenantRequestController controller = controllerWith([
+        SubscribedTenantController controller = controllerWith([
                 provision: { String requestId, Authentication auth ->
                     throw new TenantRequestException("An active subscription is required")
                 }
@@ -93,18 +93,20 @@ class TenantRequestControllerTest {
     }
 
     @Test
-    void testSweepReportsTheNumberOfUpdatedTenants() {
-        TenantRequestController controller = controllerWith([synchronizeEntitlements: { 3 }])
+    void testSweepReportsWhatItReviewedAndChanged() {
+        SubscribedTenantController controller = controllerWith([
+                synchronizeEntitlements: { [reviewed: 5, updated: 3, unmanaged: 1] }
+        ])
 
-        assert controller.synchronizeEntitlements() == [updated: 3]
+        assert controller.synchronizeEntitlements() == [reviewed: 5, updated: 3, unmanaged: 1]
     }
 
     private static Authentication authentication() {
         [getName: { "caller" }, getRoles: { ["user"] }, getAttributes: { [id: "user-1"] }] as Authentication
     }
 
-    private static TenantRequestController controllerWith(Map methods) {
-        TenantRequestController controller = new TenantRequestController()
+    private static SubscribedTenantController controllerWith(Map methods) {
+        SubscribedTenantController controller = new SubscribedTenantController()
         controller.tenantProvisioningService = methods as TenantProvisioningService
         return controller
     }

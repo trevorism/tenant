@@ -5,14 +5,17 @@ import com.trevorism.data.FastDatastoreRepository
 import com.trevorism.data.Repository
 import com.trevorism.data.model.filtering.FilterConstants
 import com.trevorism.data.model.filtering.SimpleFilter
+import com.trevorism.entitlement.Checkout
+import com.trevorism.entitlement.CheckoutRequest
+import com.trevorism.entitlement.Entitlement
+import com.trevorism.entitlement.TenantEntitlementProvider
 import com.trevorism.https.SecureHttpClient
 import com.trevorism.model.ActivationRequest
 import com.trevorism.model.AuthenticatedUser
-import com.trevorism.model.BillingSubscription
 import com.trevorism.model.ForgotPasswordRequest
-import com.trevorism.model.PaymentRequest
 import com.trevorism.model.RegistrationRequest
 import com.trevorism.model.Tenant
+import com.trevorism.model.TenantBillingMode
 import com.trevorism.model.TenantRequest
 import com.trevorism.model.TenantRequestInput
 import com.trevorism.model.TenantRequestStatus
@@ -27,27 +30,29 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultTenantProvisioningService)
 
-    static final String STRIPE_BASE_URL = "https://stripe.trade.trevorism.com"
     static final String AUTH_BASE_URL = "https://auth.trevorism.com"
     static final String PORTAL_BASE_URL = "https://trevorism.com/tenant"
-    static final double SUBSCRIPTION_PRICE_DOLLARS = 10.00d
+    static final double MONTHLY_PRICE_DOLLARS = 10.00d
     static final String TENANT_ADMIN_PERMISSIONS = "CRUDE"
     static final String ID_CLAIM = "id"
     static final String OWNER_FIELD = "ownerUserId"
-    static final String SUBSCRIPTION_FIELD = "subscriptionId"
+    static final String ENTITLEMENT_FIELD = "entitlementId"
 
     private SecureHttpClient passThruHttpClient
     private SecureHttpClient appHttpClient
     private TenantRequestValidator validator = new TenantRequestValidator()
     private Gson gson = new Gson()
 
+    TenantEntitlementProvider entitlementProvider
     Repository<TenantRequest> tenantRequestRepository
     Repository<Tenant> tenantRepository
 
     DefaultTenantProvisioningService(@Named("passThruSecureHttpClient") SecureHttpClient passThruHttpClient,
-                                     @Named("appSecureHttpClient") SecureHttpClient appHttpClient) {
+                                     @Named("appSecureHttpClient") SecureHttpClient appHttpClient,
+                                     TenantEntitlementProvider entitlementProvider) {
         this.passThruHttpClient = passThruHttpClient
         this.appHttpClient = appHttpClient
+        this.entitlementProvider = entitlementProvider
         this.tenantRequestRepository = new FastDatastoreRepository<>(TenantRequest, appHttpClient)
         this.tenantRepository = new FastDatastoreRepository<>(Tenant, appHttpClient)
     }
@@ -87,14 +92,14 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
             throw new TenantRequestException("Tenant request ${requestId} has already been provisioned")
         }
 
-        PaymentRequest paymentRequest = new PaymentRequest(
-                name: "Trevorism Tenant: ${request.name}",
-                dollars: SUBSCRIPTION_PRICE_DOLLARS,
-                successCallbackUrl: "${PORTAL_BASE_URL}?request=${request.id}&status=success",
-                failureCallbackUrl: "${PORTAL_BASE_URL}?request=${request.id}&status=cancelled")
+        CheckoutRequest checkoutRequest = new CheckoutRequest(
+                planName: "Trevorism Tenant: ${request.name}",
+                monthlyPriceDollars: MONTHLY_PRICE_DOLLARS,
+                successUrl: "${PORTAL_BASE_URL}?request=${request.id}&status=success",
+                cancelUrl: "${PORTAL_BASE_URL}?request=${request.id}&status=cancelled")
 
-        String json = passThruHttpClient.post("${STRIPE_BASE_URL}/api/subscription/session", gson.toJson(paymentRequest))
-        return gson.fromJson(json, Map)
+        Checkout checkout = entitlementProvider.startCheckout(checkoutRequest, authentication)
+        return [id: checkout?.id, url: checkout?.url]
     }
 
     @Override
@@ -104,29 +109,47 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
             return request
         }
 
-        BillingSubscription subscription = fetchSubscriptionForCaller()
-        if (!subscription?.active) {
+        Entitlement entitlement = entitlementProvider.forCaller(authentication)
+        if (!entitlement?.active) {
             throw new TenantRequestException("An active subscription is required before a tenant can be provisioned")
         }
-        ensureSubscriptionFundsOnlyThisRequest(subscription.subscriptionId, request.id)
+        if (!entitlement.reference) {
+            throw new TenantRequestException("The active subscription is missing a billing reference")
+        }
+        ensureEntitlementFundsOnlyThisRequest(entitlement.entitlementId, request.id)
 
         Tenant tenant = tenantRepository.create(new Tenant(
                 name: request.name,
                 domain: request.domain,
-                guid: UUID.randomUUID().toString()))
+                guid: UUID.randomUUID().toString(),
+                billingMode: TenantBillingMode.SUBSCRIPTION))
 
         createTenantAdministrator(request, tenant.guid)
 
         request.tenantGuid = tenant.guid
-        request.billingCustomerId = subscription.customerId
-        request.subscriptionId = subscription.subscriptionId
+        request.billingProvider = entitlement.provider
+        request.billingReference = entitlement.reference
+        request.entitlementId = entitlement.entitlementId
+        request.paidThrough = entitlement.paidThrough
         request.status = TenantRequestStatus.PROVISIONED
         request.dateProvisioned = new Date()
         return tenantRequestRepository.update(request.id, request)
     }
 
     @Override
-    int synchronizeEntitlements() {
+    TenantRequest deleteRequest(String requestId) {
+        TenantRequest request = requestId ? tenantRequestRepository.get(requestId) : null
+        if (!request) {
+            throw new TenantRequestException("Unable to locate tenant request ${requestId}")
+        }
+        if (request.status == TenantRequestStatus.PROVISIONED) {
+            throw new TenantRequestException("Remove the tenant before deleting a provisioned request")
+        }
+        return tenantRequestRepository.delete(requestId)
+    }
+
+    @Override
+    Map synchronizeEntitlements() {
         int changed = 0
         List<TenantRequest> tracked = tenantRequestRepository.list().findAll {
             it.status == TenantRequestStatus.PROVISIONED || it.status == TenantRequestStatus.SUSPENDED
@@ -141,44 +164,43 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
                 log.error("Unable to synchronize entitlement for tenant request ${request.id}", e)
             }
         }
-        return changed
+
+        List<String> unmanaged = findUnmanagedSubscriptionTenants(tracked)
+        unmanaged.each { log.error("Subscription tenant ${it} has no tenant request backing it") }
+
+        return [reviewed: tracked.size(), updated: changed, unmanaged: unmanaged.size()]
+    }
+
+    private List<String> findUnmanagedSubscriptionTenants(List<TenantRequest> tracked) {
+        Set<String> managedGuids = tracked.collect { it.tenantGuid }.findAll() as Set
+        return tenantRepository.list()
+                .findAll { TenantBillingMode.isSubscription(it.billingMode) && !managedGuids.contains(it.guid) }
+                .collect { it.guid }
     }
 
     private boolean applyEntitlement(TenantRequest request) {
-        Boolean active = subscriptionIsActive(request.billingCustomerId)
-        if (active == null) {
-            log.warn("Skipping tenant request ${request.id}; subscription state could not be determined")
+        Entitlement entitlement = entitlementProvider.forReference(request.billingReference)
+        if (!entitlement || entitlement.undetermined) {
+            log.warn("Skipping tenant request ${request.id}; entitlement state could not be determined")
             return false
         }
 
-        if (!active && request.status == TenantRequestStatus.PROVISIONED) {
+        if (!entitlement.active && request.status == TenantRequestStatus.PROVISIONED) {
             setAdministratorActive(request, false)
-            return updateStatus(request, TenantRequestStatus.SUSPENDED)
+            return updateStatus(request, TenantRequestStatus.SUSPENDED, entitlement)
         }
-        if (active && request.status == TenantRequestStatus.SUSPENDED) {
+        if (entitlement.active && request.status == TenantRequestStatus.SUSPENDED) {
             setAdministratorActive(request, true)
-            return updateStatus(request, TenantRequestStatus.PROVISIONED)
+            return updateStatus(request, TenantRequestStatus.PROVISIONED, entitlement)
         }
         return false
     }
 
-    private boolean updateStatus(TenantRequest request, String status) {
+    private boolean updateStatus(TenantRequest request, String status, Entitlement entitlement) {
         request.status = status
+        request.paidThrough = entitlement.paidThrough ?: request.paidThrough
         tenantRequestRepository.update(request.id, request)
         return true
-    }
-
-    private Boolean subscriptionIsActive(String billingCustomerId) {
-        if (!billingCustomerId) {
-            return null
-        }
-        try {
-            String json = appHttpClient.get("${STRIPE_BASE_URL}/api/subscription/customer/${billingCustomerId}")
-            return gson.fromJson(json, BillingSubscription)?.active
-        } catch (Exception e) {
-            log.warn("Unable to read subscription for customer ${billingCustomerId}: ${e.message}")
-            return null
-        }
     }
 
     private void setAdministratorActive(TenantRequest request, boolean active) {
@@ -212,25 +234,15 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
         appHttpClient.post("${AUTH_BASE_URL}/user/reset", gson.toJson(reset))
     }
 
-    private void ensureSubscriptionFundsOnlyThisRequest(String subscriptionId, String requestId) {
-        if (!subscriptionId) {
+    private void ensureEntitlementFundsOnlyThisRequest(String entitlementId, String requestId) {
+        if (!entitlementId) {
             throw new TenantRequestException("The active subscription is missing an identifier")
         }
         List<TenantRequest> funded = tenantRequestRepository.filter(
-                new SimpleFilter(SUBSCRIPTION_FIELD, FilterConstants.OPERATOR_EQUAL, subscriptionId))
+                new SimpleFilter(ENTITLEMENT_FIELD, FilterConstants.OPERATOR_EQUAL, entitlementId))
 
         if (funded.any { it.id != requestId }) {
             throw new TenantRequestException("This subscription already funds another tenant")
-        }
-    }
-
-    private BillingSubscription fetchSubscriptionForCaller() {
-        try {
-            String json = passThruHttpClient.get("${STRIPE_BASE_URL}/api/subscription")
-            return gson.fromJson(json, BillingSubscription)
-        } catch (Exception e) {
-            log.warn("Unable to read the caller's subscription: ${e.message}")
-            return null
         }
     }
 

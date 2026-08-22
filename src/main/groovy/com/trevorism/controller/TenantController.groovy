@@ -5,6 +5,7 @@ import com.trevorism.data.Repository
 import com.trevorism.data.model.filtering.FilterConstants
 import com.trevorism.data.model.filtering.SimpleFilter
 import com.trevorism.model.Tenant
+import com.trevorism.model.TenantBillingMode
 import com.trevorism.secure.Roles
 import com.trevorism.secure.Secure
 import io.micronaut.http.HttpResponse
@@ -58,12 +59,13 @@ class TenantController {
     }
 
     @Tag(name = "Tenant Operations")
-    @Operation(summary = "Creates a new tenant **Secure")
+    @Operation(summary = "Creates a new unbilled tenant **Secure")
     @Secure(Roles.SYSTEM)
     @Post(value = "/", produces = MediaType.APPLICATION_JSON, consumes = MediaType.APPLICATION_JSON)
     @Status(HttpStatus.CREATED)
     Tenant saveTenant(@Body Tenant tenant) {
         tenant.guid = UUID.randomUUID().toString()
+        tenant.billingMode = TenantBillingMode.UNBILLED
         tenantRepository.create(tenant)
     }
 
