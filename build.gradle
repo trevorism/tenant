@@ -52,7 +52,6 @@ dependencies {
     runtimeOnly("org.yaml:snakeyaml")
 
     implementation("jakarta.annotation:jakarta.annotation-api")
-    implementation 'io.projectreactor:reactor-core:3.8.6'
 
     implementation("io.swagger.core.v3:swagger-annotations")
     compileOnly("io.micronaut.openapi:micronaut-openapi"){
@@ -60,7 +59,7 @@ dependencies {
     }
 
     runtimeOnly ("ch.qos.logback:logback-classic")
-    implementation ('com.trevorism:micronaut-utility-beans:2.0.0')
+    implementation ('com.trevorism:micronaut-utility-beans:2.1.0')
     implementation ('com.trevorism:datastore-client:4.1.0')
     implementation 'com.google.code.gson:gson:2.14.0'
 
