@@ -337,7 +337,7 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
-    void testSynchronizeEntitlementsSuspendsALapsedTenant() {
+    void testAFirstLapseStartsTheGracePeriodWithoutSuspending() {
         entitlementOverrides.forReference = { String reference -> Entitlement.inactive(PROVIDER, reference) }
         TenantRequest updated = null
         def service = buildService(
@@ -345,8 +345,70 @@ class DefaultTenantProvisioningServiceTest {
                 tenantRepository([]))
 
         assert service.synchronizeEntitlements().updated == 1
+        assert appPosts.isEmpty()
+        assert updated.status == TenantRequestStatus.PROVISIONED
+        assert updated.dateLapsed
+    }
+
+    @Test
+    void testATenantIsLeftAloneWhileTheGracePeriodRuns() {
+        entitlementOverrides.forReference = { String reference -> Entitlement.inactive(PROVIDER, reference) }
+        TenantRequest lapsed = provisionedRequest()
+        lapsed.dateLapsed = daysAgo(6)
+        def service = buildService(requestRepository([lapsed]), tenantRepository([acmeTenant()]))
+
+        assert service.synchronizeEntitlements().updated == 0
+        assert appPosts.isEmpty()
+        assert lapsed.status == TenantRequestStatus.PROVISIONED
+    }
+
+    @Test
+    void testSynchronizeEntitlementsSuspendsOnceTheGracePeriodExpires() {
+        entitlementOverrides.forReference = { String reference -> Entitlement.inactive(PROVIDER, reference) }
+        TenantRequest lapsed = provisionedRequest()
+        lapsed.dateLapsed = daysAgo(8)
+        Tenant tenant = acmeTenant()
+        TenantRequest updated = null
+        def service = buildService(
+                requestRepository([lapsed], null, { String id, TenantRequest r -> updated = r; r }),
+                tenantRepository([tenant]))
+
+        assert service.synchronizeEntitlements().updated == 1
         assert appPosts[0].url == "https://auth.trevorism.com/user/deactivate"
         assert updated.status == TenantRequestStatus.SUSPENDED
+        assert tenant.status == TenantStatus.SUSPENDED
+    }
+
+    @Test
+    void testARecoveredSubscriptionClearsTheGracePeriod() {
+        entitlementOverrides.forReference = { String reference -> Entitlement.active(PROVIDER, reference, "sub_1", null) }
+        TenantRequest lapsed = provisionedRequest()
+        lapsed.dateLapsed = daysAgo(3)
+        TenantRequest updated = null
+        def service = buildService(
+                requestRepository([lapsed], null, { String id, TenantRequest r -> updated = r; r }),
+                tenantRepository([acmeTenant()]))
+
+        assert service.synchronizeEntitlements().updated == 1
+        assert appPosts.isEmpty()
+        assert updated.status == TenantRequestStatus.PROVISIONED
+        assert !updated.dateLapsed
+    }
+
+    @Test
+    void testRestoringASuspendedTenantClearsTheGracePeriod() {
+        entitlementOverrides.forReference = { String reference -> Entitlement.active(PROVIDER, reference, "sub_1", null) }
+        TenantRequest suspended = provisionedRequest()
+        suspended.status = TenantRequestStatus.SUSPENDED
+        suspended.dateLapsed = daysAgo(20)
+        TenantRequest updated = null
+        def service = buildService(
+                requestRepository([suspended], null, { String id, TenantRequest r -> updated = r; r }),
+                tenantRepository([acmeTenant()]))
+
+        assert service.synchronizeEntitlements().updated == 1
+        assert updated.status == TenantRequestStatus.PROVISIONED
+        assert !updated.dateLapsed
     }
 
     @Test
@@ -627,18 +689,6 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
-    void testSynchronizeEntitlementsMarksTheTenantSuspended() {
-        entitlementOverrides.forReference = { String reference -> Entitlement.inactive(PROVIDER, reference) }
-        Tenant tenant = new Tenant(id: "t-1", name: "Acme", domain: "acme.com", guid: "guid-1",
-                billingMode: TenantBillingMode.SUBSCRIPTION, status: TenantStatus.ACTIVE)
-        def service = buildService(requestRepository([provisionedRequest()]), tenantRepository([tenant]))
-
-        assert service.synchronizeEntitlements().updated == 1
-        assert tenant.status == TenantStatus.SUSPENDED
-        assert TenantStatus.isSuspended(tenant.status)
-    }
-
-    @Test
     void testSynchronizeEntitlementsMarksTheTenantActiveOnRestore() {
         entitlementOverrides.forReference = { String reference -> Entitlement.active(PROVIDER, reference, "sub_1", null) }
         TenantRequest suspended = provisionedRequest()
@@ -649,6 +699,10 @@ class DefaultTenantProvisioningServiceTest {
 
         assert service.synchronizeEntitlements().updated == 1
         assert tenant.status == TenantStatus.ACTIVE
+    }
+
+    private static Date daysAgo(int days) {
+        return new Date(System.currentTimeMillis() - (days * 24L * 60L * 60L * 1000L))
     }
 
     private static Tenant acmeTenant() {

@@ -3,6 +3,8 @@ package com.trevorism.controller
 import com.trevorism.model.TenantRequest
 import com.trevorism.model.TenantRequestInput
 import com.trevorism.model.TenantRequestStatus
+import com.trevorism.secure.Roles
+import com.trevorism.secure.Secure
 import com.trevorism.service.TenantProvisioningService
 import com.trevorism.service.TenantRequestException
 import io.micronaut.http.HttpStatus
@@ -120,6 +122,14 @@ class SubscribedTenantControllerTest {
         ])
 
         assert controller.synchronizeEntitlements() == [reviewed: 5, updated: 3, unmanaged: 1]
+    }
+
+    @Test
+    void testReconciliationAcceptsTheSchedulersInternalToken() {
+        Secure secure = SubscribedTenantController.getMethod("synchronizeEntitlements").getAnnotation(Secure)
+
+        assert secure.value() == Roles.SYSTEM
+        assert secure.allowInternal()
     }
 
     private static Authentication authentication() {

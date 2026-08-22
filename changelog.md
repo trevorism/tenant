@@ -1,3 +1,8 @@
+## 1.1.0
+
+Give a lapsed subscription a seven day grace period before its tenant is suspended, and let the
+scheduler reach entitlement reconciliation with its internal token.
+
 ## 1.0.0
 
 Tie tenant creation to billing. Tenants now carry a billing mode and an active/suspended status,

@@ -72,7 +72,7 @@ class SubscribedTenantController {
 
     @Tag(name = "Subscribed Tenant Operations")
     @Operation(summary = "Reconciles subscribed tenants against their subscription state **Secure")
-    @Secure(Roles.SYSTEM)
+    @Secure(value = Roles.SYSTEM, allowInternal = true)
     @Post(value = "/reconciliation", produces = MediaType.APPLICATION_JSON)
     Map synchronizeEntitlements() {
         return tenantProvisioningService.synchronizeEntitlements()
