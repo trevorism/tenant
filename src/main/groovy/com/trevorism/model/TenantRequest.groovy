@@ -19,4 +19,5 @@ class TenantRequest {
 
     Date dateCreated
     Date dateProvisioned
+    Date dateLapsed
 }

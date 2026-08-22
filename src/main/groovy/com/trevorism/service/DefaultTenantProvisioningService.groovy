@@ -39,6 +39,8 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
     static final String OWNER_FIELD = "ownerUserId"
     static final String ENTITLEMENT_FIELD = "entitlementId"
     static final String GUID_FIELD = "guid"
+    static final int LAPSE_GRACE_DAYS = 7
+    static final long LAPSE_GRACE_MILLIS = LAPSE_GRACE_DAYS * 24L * 60L * 60L * 1000L
 
     private SecureHttpClient passThruHttpClient
     private SecureHttpClient appHttpClient
@@ -187,17 +189,46 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
             return false
         }
 
-        if (!entitlement.active && request.status == TenantRequestStatus.PROVISIONED) {
-            setTenantStatus(request.tenantGuid, TenantStatus.SUSPENDED)
-            setAdministratorActive(request, false)
-            return updateStatus(request, TenantRequestStatus.SUSPENDED, entitlement)
-        }
-        if (entitlement.active && request.status == TenantRequestStatus.SUSPENDED) {
+        return entitlement.active ? restoreEntitlement(request, entitlement) : lapseEntitlement(request, entitlement)
+    }
+
+    private boolean restoreEntitlement(TenantRequest request, Entitlement entitlement) {
+        if (request.status == TenantRequestStatus.SUSPENDED) {
             setTenantStatus(request.tenantGuid, TenantStatus.ACTIVE)
             setAdministratorActive(request, true)
+            request.dateLapsed = null
             return updateStatus(request, TenantRequestStatus.PROVISIONED, entitlement)
         }
+        if (request.dateLapsed) {
+            log.info("Subscription for tenant request ${request.id} recovered before the grace period expired")
+            request.dateLapsed = null
+            tenantRequestRepository.update(request.id, request)
+            return true
+        }
         return false
+    }
+
+    private boolean lapseEntitlement(TenantRequest request, Entitlement entitlement) {
+        if (request.status != TenantRequestStatus.PROVISIONED) {
+            return false
+        }
+        if (!request.dateLapsed) {
+            log.warn("Subscription for tenant request ${request.id} is no longer active; starting the grace period")
+            request.dateLapsed = new Date()
+            tenantRequestRepository.update(request.id, request)
+            return true
+        }
+        if (withinGracePeriod(request.dateLapsed)) {
+            return false
+        }
+
+        setTenantStatus(request.tenantGuid, TenantStatus.SUSPENDED)
+        setAdministratorActive(request, false)
+        return updateStatus(request, TenantRequestStatus.SUSPENDED, entitlement)
+    }
+
+    private static boolean withinGracePeriod(Date dateLapsed) {
+        return dateLapsed.time + LAPSE_GRACE_MILLIS > System.currentTimeMillis()
     }
 
     private void claimTenant(TenantRequest request) {
