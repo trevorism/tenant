@@ -1,3 +1,8 @@
+## 1.0.0
+
+Tie tenant creation to billing. Tenants now carry a billing mode and an active/suspended status,
+and entitlement reconciliation suspends the tenant record alongside its administrator.
+
 ## 0.5.0
 
 Include versioning plugin, add a /me endpoint.
