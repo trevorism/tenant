@@ -1,3 +1,7 @@
+## 1.2.0
+
+Handle google/microsoft based logins for subscribed tenants as an error for now.
+
 ## 1.1.0
 
 Give a lapsed subscription a seven day grace period before its tenant is suspended, and let the
