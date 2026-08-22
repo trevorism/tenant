@@ -262,6 +262,47 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
+    void testProvisionTellsTheOwnerTheTenantIsReady() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
+
+        service.provision("req-1", auth(OWNER_ID))
+
+        Map mail = gson.fromJson(appPosts.find { it.url.startsWith("https://email") }.body as String, Map)
+        assert appPosts.last().url == "https://email.action.trevorism.com/mail/"
+        assert mail.recipients == ["trevor@example.com"]
+        assert mail.subject.contains("Acme")
+        assert mail.body.contains("acme.com")
+        assert !mail.body.toLowerCase().contains("password reset link")
+    }
+
+    @Test
+    void testAnOwnerSuppliedNameCannotInjectMarkupIntoTheEmail() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        TenantRequest sneaky = pendingRequest()
+        sneaky.name = "<script>alert(1)</script>"
+        def service = buildService(requestRepository([sneaky]), tenantRepository([]))
+
+        service.provision("req-1", auth(OWNER_ID))
+
+        Map mail = gson.fromJson(appPosts.last().body as String, Map)
+        assert !mail.body.contains("<script>")
+        assert mail.body.contains("&lt;script&gt;")
+    }
+
+    @Test
+    void testAFailedAnnouncementDoesNotUndoProvisioning() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        appPostFailures << "https://email.action.trevorism.com/mail/"
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
+
+        TenantRequest result = service.provision("req-1", auth(OWNER_ID))
+
+        assert result.status == TenantRequestStatus.PROVISIONED
+        assert result.tenantGuid
+    }
+
+    @Test
     void testProvisionIsIdempotent() {
         def service = buildService(requestRepository([provisionedRequest()]), tenantRepository([]))
 
@@ -603,9 +644,9 @@ class DefaultTenantProvisioningServiceTest {
         assert created.isEmpty()
         assert result.tenantGuid == "guid-1"
         assert result.status == TenantRequestStatus.PROVISIONED
-        assert appPosts.collect { it.url } == ["https://auth.trevorism.com/user/",
-                                               "https://auth.trevorism.com/user/activate",
-                                               "https://auth.trevorism.com/user/reset"]
+        assert authPosts() == ["https://auth.trevorism.com/user/",
+                               "https://auth.trevorism.com/user/activate",
+                               "https://auth.trevorism.com/user/reset"]
     }
 
     @Test
@@ -619,9 +660,9 @@ class DefaultTenantProvisioningServiceTest {
         TenantRequest result = service.provision("req-1", auth(OWNER_ID))
 
         assert result.status == TenantRequestStatus.PROVISIONED
-        assert appPosts.collect { it.url } == ["https://auth.trevorism.com/user/",
-                                               "https://auth.trevorism.com/user/activate",
-                                               "https://auth.trevorism.com/user/reset"]
+        assert authPosts() == ["https://auth.trevorism.com/user/",
+                               "https://auth.trevorism.com/user/activate",
+                               "https://auth.trevorism.com/user/reset"]
     }
 
     @Test
@@ -651,8 +692,7 @@ class DefaultTenantProvisioningServiceTest {
         assert result.tenantGuid == "guid-1"
         assert result.status == TenantRequestStatus.PROVISIONED
         assert existing.status == TenantStatus.ACTIVE
-        assert appPosts.size() == 1
-        assert appPosts[0].url == "https://auth.trevorism.com/user/activate"
+        assert authPosts() == ["https://auth.trevorism.com/user/activate"]
     }
 
     @Test
@@ -733,6 +773,10 @@ class DefaultTenantProvisioningServiceTest {
 
         assert service.synchronizeEntitlements().updated == 1
         assert tenant.status == TenantStatus.ACTIVE
+    }
+
+    private List<String> authPosts() {
+        return appPosts.collect { it.url }.findAll { it.startsWith("https://auth.trevorism.com") }
     }
 
     private static Date daysAgo(int days) {
