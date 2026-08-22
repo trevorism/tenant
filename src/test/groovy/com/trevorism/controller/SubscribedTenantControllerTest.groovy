@@ -19,7 +19,10 @@ class SubscribedTenantControllerTest {
                 requestTenant: { TenantRequestInput input, Authentication auth -> expected }
         ])
 
-        assert controller.requestTenant(new TenantRequestInput(name: "Acme", domain: "acme.com"), authentication()).is(expected)
+        def view = controller.requestTenant(new TenantRequestInput(name: "Acme", domain: "acme.com"), authentication())
+
+        assert view.id == "req-1"
+        assert view.status == TenantRequestStatus.PENDING_PAYMENT
     }
 
     @Test
@@ -54,7 +57,21 @@ class SubscribedTenantControllerTest {
         def response = controller.getCurrentRequest(authentication())
 
         assert response.status == HttpStatus.OK
-        assert response.body().is(expected)
+        assert response.body().id == "req-1"
+    }
+
+    @Test
+    void testGetCurrentRequestNeverExposesBillingIdentifiers() {
+        TenantRequest stored = new TenantRequest(id: "req-1", status: TenantRequestStatus.PROVISIONED,
+                tenantGuid: "guid-1", billingProvider: "STRIPE", billingReference: "cus_1", entitlementId: "sub_1")
+        SubscribedTenantController controller = controllerWith([getRequestForCaller: { Authentication auth -> stored }])
+
+        def body = controller.getCurrentRequest(authentication()).body()
+
+        assert !(body instanceof TenantRequest)
+        assert !body.properties.containsKey("billingReference")
+        assert !body.properties.containsKey("entitlementId")
+        assert !body.properties.containsKey("tenantGuid")
     }
 
     @Test
@@ -73,7 +90,11 @@ class SubscribedTenantControllerTest {
                 provision: { String requestId, Authentication auth -> expected }
         ])
 
-        assert controller.provision("req-1", authentication()).is(expected)
+        def view = controller.provision("req-1", authentication())
+
+        assert view.id == "req-1"
+        assert view.status == TenantRequestStatus.PROVISIONED
+        assert !view.properties.containsKey("tenantGuid")
     }
 
     @Test

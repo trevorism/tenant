@@ -19,6 +19,7 @@ import com.trevorism.model.TenantBillingMode
 import com.trevorism.model.TenantRequest
 import com.trevorism.model.TenantRequestInput
 import com.trevorism.model.TenantRequestStatus
+import com.trevorism.model.TenantStatus
 import io.micronaut.security.authentication.Authentication
 import jakarta.inject.Named
 import jakarta.inject.Singleton
@@ -37,6 +38,7 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
     static final String ID_CLAIM = "id"
     static final String OWNER_FIELD = "ownerUserId"
     static final String ENTITLEMENT_FIELD = "entitlementId"
+    static final String GUID_FIELD = "guid"
 
     private SecureHttpClient passThruHttpClient
     private SecureHttpClient appHttpClient
@@ -118,15 +120,7 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
         }
         ensureEntitlementFundsOnlyThisRequest(entitlement.entitlementId, request.id)
 
-        Tenant tenant = tenantRepository.create(new Tenant(
-                name: request.name,
-                domain: request.domain,
-                guid: UUID.randomUUID().toString(),
-                billingMode: TenantBillingMode.SUBSCRIPTION))
-
-        createTenantAdministrator(request, tenant.guid)
-
-        request.tenantGuid = tenant.guid
+        request.tenantGuid = request.tenantGuid ? restoreTenant(request) : createTenant(request)
         request.billingProvider = entitlement.provider
         request.billingReference = entitlement.reference
         request.entitlementId = entitlement.entitlementId
@@ -142,8 +136,8 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
         if (!request) {
             throw new TenantRequestException("Unable to locate tenant request ${requestId}")
         }
-        if (request.status == TenantRequestStatus.PROVISIONED) {
-            throw new TenantRequestException("Remove the tenant before deleting a provisioned request")
+        if (request.tenantGuid) {
+            throw new TenantRequestException("Remove tenant ${request.tenantGuid} before deleting this request")
         }
         return tenantRequestRepository.delete(requestId)
     }
@@ -186,14 +180,63 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
         }
 
         if (!entitlement.active && request.status == TenantRequestStatus.PROVISIONED) {
+            setTenantStatus(request.tenantGuid, TenantStatus.SUSPENDED)
             setAdministratorActive(request, false)
             return updateStatus(request, TenantRequestStatus.SUSPENDED, entitlement)
         }
         if (entitlement.active && request.status == TenantRequestStatus.SUSPENDED) {
+            setTenantStatus(request.tenantGuid, TenantStatus.ACTIVE)
             setAdministratorActive(request, true)
             return updateStatus(request, TenantRequestStatus.PROVISIONED, entitlement)
         }
         return false
+    }
+
+    private String createTenant(TenantRequest request) {
+        TenantRequestValidator.validateAvailability(request.name, request.domain, tenantRepository.list())
+
+        Tenant tenant = tenantRepository.create(new Tenant(
+                name: request.name,
+                domain: request.domain,
+                guid: UUID.randomUUID().toString(),
+                billingMode: TenantBillingMode.SUBSCRIPTION,
+                status: TenantStatus.ACTIVE))
+
+        createTenantAdministrator(request, tenant.guid)
+        return tenant.guid
+    }
+
+    private String restoreTenant(TenantRequest request) {
+        Tenant tenant = findTenantByGuid(request.tenantGuid)
+        if (!tenant) {
+            throw new TenantRequestException("Unable to locate tenant ${request.tenantGuid} for this request")
+        }
+
+        setTenantStatus(tenant.guid, TenantStatus.ACTIVE)
+        setAdministratorActive(request, true)
+        return tenant.guid
+    }
+
+    private Tenant findTenantByGuid(String tenantGuid) {
+        if (!tenantGuid) {
+            return null
+        }
+        List<Tenant> found = tenantRepository.filter(
+                new SimpleFilter(GUID_FIELD, FilterConstants.OPERATOR_EQUAL, tenantGuid))
+        return found ? found[0] : null
+    }
+
+    private void setTenantStatus(String tenantGuid, String status) {
+        Tenant tenant = findTenantByGuid(tenantGuid)
+        if (!tenant) {
+            log.warn("Unable to locate tenant ${tenantGuid} to mark it ${status}")
+            return
+        }
+        if (tenant.status == status) {
+            return
+        }
+        tenant.status = status
+        tenantRepository.update(tenant.id, tenant)
     }
 
     private boolean updateStatus(TenantRequest request, String status, Entitlement entitlement) {

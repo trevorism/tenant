@@ -14,6 +14,7 @@ import com.trevorism.model.TenantBillingMode
 import com.trevorism.model.TenantRequest
 import com.trevorism.model.TenantRequestInput
 import com.trevorism.model.TenantRequestStatus
+import com.trevorism.model.TenantStatus
 import io.micronaut.security.authentication.Authentication
 import org.junit.jupiter.api.Test
 
@@ -375,6 +376,117 @@ class DefaultTenantProvisioningServiceTest {
         assert appPosts.isEmpty()
     }
 
+    @Test
+    void testProvisionRestoresTheExistingTenantWhenTheRequestWasSuspended() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        TenantRequest suspended = provisionedRequest()
+        suspended.status = TenantRequestStatus.SUSPENDED
+        Tenant existing = new Tenant(id: "t-1", name: "Acme", domain: "acme.com", guid: "guid-1",
+                billingMode: TenantBillingMode.SUBSCRIPTION, status: TenantStatus.SUSPENDED)
+        List<Tenant> created = []
+        def service = buildService(requestRepository([suspended]), tenantRepository([existing], { Tenant t -> created << t; t }))
+
+        TenantRequest result = service.provision("req-1", auth(OWNER_ID))
+
+        assert created.isEmpty()
+        assert result.tenantGuid == "guid-1"
+        assert result.status == TenantRequestStatus.PROVISIONED
+        assert existing.status == TenantStatus.ACTIVE
+        assert appPosts.size() == 1
+        assert appPosts[0].url == "https://auth.trevorism.com/user/activate"
+    }
+
+    @Test
+    void testProvisionRefusesWhenTheSuspendedTenantNoLongerExists() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        TenantRequest suspended = provisionedRequest()
+        suspended.status = TenantRequestStatus.SUSPENDED
+        def service = buildService(requestRepository([suspended]), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.provision("req-1", auth(OWNER_ID))
+        }
+        assert appPosts.isEmpty()
+    }
+
+    @Test
+    void testProvisionRefusesADomainClaimedWhileTheRequestAwaitedPayment() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        Tenant claimed = new Tenant(id: "t-9", name: "Rival", domain: "acme.com", guid: "guid-rival",
+                billingMode: TenantBillingMode.SUBSCRIPTION, status: TenantStatus.ACTIVE)
+        List<Tenant> created = []
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([claimed], { Tenant t -> created << t; t }))
+
+        assertThrows(TenantRequestException) {
+            service.provision("req-1", auth(OWNER_ID))
+        }
+        assert created.isEmpty()
+        assert appPosts.isEmpty()
+    }
+
+    @Test
+    void testProvisionRefusesANameClaimedWhileTheRequestAwaitedPayment() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        Tenant claimed = new Tenant(id: "t-9", name: "Acme", domain: "other.com", guid: "guid-rival",
+                billingMode: TenantBillingMode.SUBSCRIPTION, status: TenantStatus.ACTIVE)
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([claimed]))
+
+        assertThrows(TenantRequestException) {
+            service.provision("req-1", auth(OWNER_ID))
+        }
+        assert appPosts.isEmpty()
+    }
+
+    @Test
+    void testProvisionMarksANewTenantActive() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        Tenant created = null
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([], { Tenant t -> created = t; t }))
+
+        service.provision("req-1", auth(OWNER_ID))
+
+        assert created.status == TenantStatus.ACTIVE
+        assert created.billingMode == TenantBillingMode.SUBSCRIPTION
+    }
+
+    @Test
+    void testDeleteRequestRefusesToOrphanASuspendedTenant() {
+        TenantRequest suspended = provisionedRequest()
+        suspended.status = TenantRequestStatus.SUSPENDED
+        List<String> deleted = []
+        def service = buildService(requestRepository([suspended], null, null, deleted), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.deleteRequest("req-1")
+        }
+        assert deleted.isEmpty()
+    }
+
+    @Test
+    void testSynchronizeEntitlementsMarksTheTenantSuspended() {
+        entitlementOverrides.forReference = { String reference -> Entitlement.inactive(PROVIDER, reference) }
+        Tenant tenant = new Tenant(id: "t-1", name: "Acme", domain: "acme.com", guid: "guid-1",
+                billingMode: TenantBillingMode.SUBSCRIPTION, status: TenantStatus.ACTIVE)
+        def service = buildService(requestRepository([provisionedRequest()]), tenantRepository([tenant]))
+
+        assert service.synchronizeEntitlements().updated == 1
+        assert tenant.status == TenantStatus.SUSPENDED
+        assert TenantStatus.isSuspended(tenant.status)
+    }
+
+    @Test
+    void testSynchronizeEntitlementsMarksTheTenantActiveOnRestore() {
+        entitlementOverrides.forReference = { String reference -> Entitlement.active(PROVIDER, reference, "sub_1", null) }
+        TenantRequest suspended = provisionedRequest()
+        suspended.status = TenantRequestStatus.SUSPENDED
+        Tenant tenant = new Tenant(id: "t-1", name: "Acme", domain: "acme.com", guid: "guid-1",
+                billingMode: TenantBillingMode.SUBSCRIPTION, status: TenantStatus.SUSPENDED)
+        def service = buildService(requestRepository([suspended]), tenantRepository([tenant]))
+
+        assert service.synchronizeEntitlements().updated == 1
+        assert tenant.status == TenantStatus.ACTIVE
+    }
+
     private static TenantRequest pendingRequest() {
         return new TenantRequest(id: "req-1", name: "Acme", domain: "acme.com",
                 status: TenantRequestStatus.PENDING_PAYMENT, ownerUserId: OWNER_ID,
@@ -449,7 +561,9 @@ class DefaultTenantProvisioningServiceTest {
     private static Repository<Tenant> tenantRepository(List<Tenant> stored, Closure<Tenant> onCreate = null) {
         return [
                 list  : { stored },
-                create: { Tenant tenant -> onCreate ? onCreate.call(tenant) : tenant }
+                filter: { SimpleFilter filter -> stored.findAll { it[filter.field] == filter.value } },
+                create: { Tenant tenant -> onCreate ? onCreate.call(tenant) : tenant },
+                update: { String id, Tenant tenant -> tenant }
         ] as Repository
     }
 }

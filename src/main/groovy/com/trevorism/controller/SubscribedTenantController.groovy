@@ -2,6 +2,7 @@ package com.trevorism.controller
 
 import com.trevorism.model.TenantRequest
 import com.trevorism.model.TenantRequestInput
+import com.trevorism.model.TenantRequestView
 import com.trevorism.secure.Roles
 import com.trevorism.secure.Secure
 import com.trevorism.service.TenantProvisioningService
@@ -32,17 +33,17 @@ class SubscribedTenantController {
     @Secure(Roles.USER)
     @Post(value = "/", produces = MediaType.APPLICATION_JSON, consumes = MediaType.APPLICATION_JSON)
     @Status(HttpStatus.CREATED)
-    TenantRequest requestTenant(@Body TenantRequestInput input, Authentication authentication) {
-        return invoke { tenantProvisioningService.requestTenant(input, authentication) }
+    TenantRequestView requestTenant(@Body TenantRequestInput input, Authentication authentication) {
+        return TenantRequestView.from(invoke { tenantProvisioningService.requestTenant(input, authentication) })
     }
 
     @Tag(name = "Subscribed Tenant Operations")
     @Operation(summary = "Gets the subscribed tenant request of the current caller **Secure")
     @Secure(Roles.USER)
     @Get(value = "/me", produces = MediaType.APPLICATION_JSON)
-    HttpResponse<TenantRequest> getCurrentRequest(Authentication authentication) {
+    HttpResponse<TenantRequestView> getCurrentRequest(Authentication authentication) {
         TenantRequest request = invoke { tenantProvisioningService.getRequestForCaller(authentication) }
-        return request ? HttpResponse.ok(request) : HttpResponse.noContent()
+        return request ? HttpResponse.ok(TenantRequestView.from(request)) : HttpResponse.noContent()
     }
 
     @Tag(name = "Subscribed Tenant Operations")
@@ -57,8 +58,8 @@ class SubscribedTenantController {
     @Operation(summary = "Provisions the tenant once the subscription is active **Secure")
     @Secure(Roles.USER)
     @Post(value = "/{requestId}/provision", produces = MediaType.APPLICATION_JSON)
-    TenantRequest provision(String requestId, Authentication authentication) {
-        return invoke { tenantProvisioningService.provision(requestId, authentication) }
+    TenantRequestView provision(String requestId, Authentication authentication) {
+        return TenantRequestView.from(invoke { tenantProvisioningService.provision(requestId, authentication) })
     }
 
     @Tag(name = "Subscribed Tenant Operations")

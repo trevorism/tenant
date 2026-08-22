@@ -6,6 +6,7 @@ import com.trevorism.data.model.filtering.FilterConstants
 import com.trevorism.data.model.filtering.SimpleFilter
 import com.trevorism.model.Tenant
 import com.trevorism.model.TenantBillingMode
+import com.trevorism.model.TenantStatus
 import com.trevorism.secure.Roles
 import com.trevorism.secure.Secure
 import io.micronaut.http.HttpResponse
@@ -66,6 +67,7 @@ class TenantController {
     Tenant saveTenant(@Body Tenant tenant) {
         tenant.guid = UUID.randomUUID().toString()
         tenant.billingMode = TenantBillingMode.UNBILLED
+        tenant.status = TenantStatus.ACTIVE
         tenantRepository.create(tenant)
     }
 

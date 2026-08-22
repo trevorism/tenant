@@ -1,6 +1,7 @@
 ## 0.6.0
 
-Tie tenant creation to billing.
+Tie tenant creation to billing. Tenants now carry a billing mode and an active/suspended status,
+and the entitlement sweep suspends the tenant record alongside its administrator.
 
 ## 0.5.0
 

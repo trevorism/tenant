@@ -52,7 +52,7 @@ class TenantRequestValidator {
         }
     }
 
-    private static void validateAvailability(String name, String domain, List<Tenant> tenants) {
+    static void validateAvailability(String name, String domain, List<Tenant> tenants) {
         if (tenants.any { normalizeDomain(it.domain) == domain }) {
             throw new TenantRequestException("Domain ${domain} is already in use")
         }

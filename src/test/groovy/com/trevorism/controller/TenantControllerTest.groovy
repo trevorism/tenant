@@ -4,6 +4,7 @@ import com.trevorism.data.Repository
 import com.trevorism.data.model.filtering.SimpleFilter
 import com.trevorism.model.Tenant
 import com.trevorism.model.TenantBillingMode
+import com.trevorism.model.TenantStatus
 import io.micronaut.http.HttpResponse
 import io.micronaut.http.HttpStatus
 import io.micronaut.security.authentication.Authentication
@@ -112,6 +113,19 @@ class TenantControllerTest {
         controller.saveTenant(new Tenant(name: "Sandbox", domain: "sandbox.test", billingMode: "SUBSCRIPTION"))
 
         assert created.billingMode == TenantBillingMode.UNBILLED
+    }
+
+    @Test
+    void testSaveTenantAlwaysCreatesAnActiveTenant() {
+        Tenant created = null
+        TenantController controller = controllerWith([create: { Tenant tenant ->
+            created = tenant
+            tenant
+        }] as Repository)
+
+        controller.saveTenant(new Tenant(name: "Sandbox", domain: "sandbox.test", status: "SUSPENDED"))
+
+        assert created.status == TenantStatus.ACTIVE
     }
 
     @Test

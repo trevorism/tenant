@@ -6,4 +6,5 @@ class Tenant {
     String domain
     String guid
     String billingMode
+    String status
 }
