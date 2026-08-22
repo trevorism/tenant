@@ -49,7 +49,7 @@ class SubscribedTenantController {
     @Tag(name = "Subscribed Tenant Operations")
     @Operation(summary = "Creates a subscription checkout session for a tenant request **Secure")
     @Secure(Roles.USER)
-    @Get(value = "/{requestId}/session", produces = MediaType.APPLICATION_JSON)
+    @Post(value = "/{requestId}/session", produces = MediaType.APPLICATION_JSON)
     Map createCheckoutSession(String requestId, Authentication authentication) {
         return invoke { tenantProvisioningService.createCheckoutSession(requestId, authentication) }
     }

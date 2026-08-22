@@ -76,6 +76,10 @@ class StripeEntitlementProvider implements TenantEntitlementProvider {
         }
 
         String reference = subscription.customerId as String
+        if (!(subscription.active instanceof Boolean)) {
+            log.warn("Subscription response for customer ${reference} carries no usable active flag")
+            return Entitlement.unknown(PROVIDER_NAME)
+        }
         if (!subscription.active) {
             return Entitlement.inactive(PROVIDER_NAME, reference)
         }

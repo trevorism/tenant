@@ -82,6 +82,36 @@ class StripeEntitlementProviderTest {
     }
 
     @Test
+    void testAPartialResponseIsUndeterminedRatherThanInactive() {
+        passThruGets[SUBSCRIPTION_URL] = '{"customerId":"cus_1"}'
+
+        Entitlement entitlement = buildProvider().forCaller(authentication())
+
+        assert entitlement.undetermined
+        assert !entitlement.active
+    }
+
+    @Test
+    void testANonBooleanActiveFlagIsUndetermined() {
+        passThruGets[SUBSCRIPTION_URL] = '{"customerId":"cus_1","active":"false"}'
+
+        Entitlement entitlement = buildProvider().forCaller(authentication())
+
+        assert entitlement.undetermined
+        assert !entitlement.active
+    }
+
+    @Test
+    void testAPartialCustomerLookupNeverSuspendsATenant() {
+        appGets[CUSTOMER_URL] = '{"customerId":"cus_1","subscriptionId":"sub_9"}'
+
+        Entitlement entitlement = buildProvider().forReference("cus_1")
+
+        assert entitlement.undetermined
+        assert !entitlement.active
+    }
+
+    @Test
     void testForCallerReportsUndeterminedWhenStripeCannotBeReached() {
         Entitlement entitlement = buildProvider().forCaller(authentication())
 

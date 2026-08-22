@@ -80,7 +80,7 @@ class TenantRequestValidatorTest {
 
     @Test
     void testRejectsASecondOpenRequestFromTheSameOwner() {
-        List<TenantRequest> owned = [new TenantRequest(status: TenantRequestStatus.PENDING_PAYMENT)]
+        List<TenantRequest> owned = [new TenantRequest(ownerUserId: "user-1", status: TenantRequestStatus.PENDING_PAYMENT)]
         assertThrows(TenantRequestException) {
             validator.validate(new TenantRequestInput(name: "Acme", domain: "acme.com"), "user-1", [], owned)
         }
@@ -88,7 +88,32 @@ class TenantRequestValidatorTest {
 
     @Test
     void testAllowsANewRequestWhenThePreviousOneIsSuspended() {
-        List<TenantRequest> owned = [new TenantRequest(status: TenantRequestStatus.SUSPENDED)]
+        List<TenantRequest> owned = [new TenantRequest(ownerUserId: "user-1", status: TenantRequestStatus.SUSPENDED)]
         validator.validate(new TenantRequestInput(name: "Acme", domain: "acme.com"), "user-1", [], owned)
+    }
+
+    @Test
+    void testRejectsADomainAnotherOwnerHasAlreadyReserved() {
+        List<TenantRequest> requests = [new TenantRequest(ownerUserId: "user-2", name: "Rival",
+                domain: "acme.com", status: TenantRequestStatus.PENDING_PAYMENT)]
+        assertThrows(TenantRequestException) {
+            validator.validate(new TenantRequestInput(name: "Acme", domain: "acme.com"), "user-1", [], requests)
+        }
+    }
+
+    @Test
+    void testRejectsANameAnotherOwnerHasAlreadyReserved() {
+        List<TenantRequest> requests = [new TenantRequest(ownerUserId: "user-2", name: "acme",
+                domain: "other.com", status: TenantRequestStatus.PENDING_PAYMENT)]
+        assertThrows(TenantRequestException) {
+            validator.validate(new TenantRequestInput(name: "Acme", domain: "acme.com"), "user-1", [], requests)
+        }
+    }
+
+    @Test
+    void testASuspendedRequestFromAnotherOwnerDoesNotReserveTheDomain() {
+        List<TenantRequest> requests = [new TenantRequest(ownerUserId: "user-2", name: "Rival",
+                domain: "acme.com", status: TenantRequestStatus.SUSPENDED)]
+        validator.validate(new TenantRequestInput(name: "Acme", domain: "acme.com"), "user-1", [], requests)
     }
 }

@@ -23,7 +23,7 @@ class TenantRequestValidator {
         return domain?.trim()?.toLowerCase()
     }
 
-    void validate(TenantRequestInput input, String ownerUserId, List<Tenant> tenants, List<TenantRequest> ownerRequests) {
+    void validate(TenantRequestInput input, String ownerUserId, List<Tenant> tenants, List<TenantRequest> requests) {
         if (!ownerUserId) {
             throw new TenantRequestException("Unable to identify the requesting user")
         }
@@ -33,8 +33,12 @@ class TenantRequestValidator {
 
         validateName(name)
         validateDomain(domain)
-        validateAvailability(name, domain, tenants)
-        validateOwnerHasNoOpenRequest(ownerRequests)
+        validateOwnerHasNoOpenRequest(requests.findAll { it.ownerUserId == ownerUserId })
+        validateAvailability(name, domain, tenants, openRequests(requests))
+    }
+
+    static List<TenantRequest> openRequests(List<TenantRequest> requests) {
+        return requests.findAll { it.status != TenantRequestStatus.SUSPENDED }
     }
 
     private static void validateName(String name) {
@@ -52,12 +56,19 @@ class TenantRequestValidator {
         }
     }
 
-    static void validateAvailability(String name, String domain, List<Tenant> tenants) {
+    static void validateAvailability(String name, String domain, List<Tenant> tenants,
+                                     List<TenantRequest> reservations = []) {
         if (tenants.any { normalizeDomain(it.domain) == domain }) {
             throw new TenantRequestException("Domain ${domain} is already in use")
         }
         if (tenants.any { it.name?.equalsIgnoreCase(name) }) {
             throw new TenantRequestException("Tenant name ${name} is already in use")
+        }
+        if (reservations.any { normalizeDomain(it.domain) == domain }) {
+            throw new TenantRequestException("Domain ${domain} is already reserved by another request")
+        }
+        if (reservations.any { it.name?.equalsIgnoreCase(name) }) {
+            throw new TenantRequestException("Tenant name ${name} is already reserved by another request")
         }
     }
 

@@ -30,6 +30,7 @@ class DefaultTenantProvisioningServiceTest {
     private List<Map> appPosts = []
     private Map<String, String> passThruGets = [:]
     private Map<String, Object> entitlementOverrides = [:]
+    private Closure appPostListener = null
 
     @Test
     void testRequestTenantPersistsAPendingRequestWithOwnerDetails() {
@@ -377,6 +378,50 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
+    void testGetRequestForCallerReturnsNothingWhenTheCallerHasNoRequests() {
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        assert service.getRequestForCaller(auth(OWNER_ID)) == null
+    }
+
+    @Test
+    void testProvisionRecordsTheTenantBeforeCallingTheAuthService() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        List<String> sequence = []
+        Tenant created = null
+        def requests = requestRepository([pendingRequest()], null,
+                { String id, TenantRequest r -> sequence << "checkpoint:${r.tenantGuid}".toString(); r })
+        def service = buildService(requests, tenantRepository([], { Tenant t -> created = t; t }))
+        appPostListener = { String url -> sequence << url }
+
+        service.provision("req-1", auth(OWNER_ID))
+
+        assert sequence.first() == "checkpoint:${created.guid}".toString()
+        assert sequence[1] == "https://auth.trevorism.com/user/"
+    }
+
+    @Test
+    void testProvisionResumesAfterTheAuthServiceFailedMidway() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        TenantRequest halfProvisioned = pendingRequest()
+        halfProvisioned.tenantGuid = "guid-1"
+        Tenant existing = new Tenant(id: "t-1", name: "Acme", domain: "acme.com", guid: "guid-1",
+                billingMode: TenantBillingMode.SUBSCRIPTION, status: TenantStatus.ACTIVE)
+        List<Tenant> created = []
+        def service = buildService(requestRepository([halfProvisioned]),
+                tenantRepository([existing], { Tenant t -> created << t; t }))
+
+        TenantRequest result = service.provision("req-1", auth(OWNER_ID))
+
+        assert created.isEmpty()
+        assert result.tenantGuid == "guid-1"
+        assert result.status == TenantRequestStatus.PROVISIONED
+        assert appPosts.collect { it.url } == ["https://auth.trevorism.com/user/",
+                                               "https://auth.trevorism.com/user/activate",
+                                               "https://auth.trevorism.com/user/reset"]
+    }
+
+    @Test
     void testProvisionRestoresTheExistingTenantWhenTheRequestWasSuspended() {
         entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
         TenantRequest suspended = provisionedRequest()
@@ -526,7 +571,7 @@ class DefaultTenantProvisioningServiceTest {
         return (behaviour + entitlementOverrides) as TenantEntitlementProvider
     }
 
-    private static SecureHttpClient stubClient(Map<String, String> gets, List<Map> posts) {
+    private SecureHttpClient stubClient(Map<String, String> gets, List<Map> posts) {
         return [
                 get : { String url ->
                     if (!gets.containsKey(url)) {
@@ -536,6 +581,7 @@ class DefaultTenantProvisioningServiceTest {
                 },
                 post: { String url, String body ->
                     posts << [url: url, body: body]
+                    appPostListener?.call(url)
                     return "{}"
                 }
         ] as SecureHttpClient

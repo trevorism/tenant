@@ -62,7 +62,7 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
     @Override
     TenantRequest requestTenant(TenantRequestInput input, Authentication authentication) {
         String ownerUserId = callerId(authentication)
-        validator.validate(input, ownerUserId, tenantRepository.list(), requestsForOwner(ownerUserId))
+        validator.validate(input, ownerUserId, tenantRepository.list(), tenantRequestRepository.list() ?: [])
 
         AuthenticatedUser owner = fetchCallerIdentity()
         if (!owner?.username || !owner?.email) {
@@ -120,7 +120,12 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
         }
         ensureEntitlementFundsOnlyThisRequest(entitlement.entitlementId, request.id)
 
-        request.tenantGuid = request.tenantGuid ? restoreTenant(request) : createTenant(request)
+        if (request.tenantGuid) {
+            resumeTenant(request)
+        } else {
+            claimTenant(request)
+        }
+
         request.billingProvider = entitlement.provider
         request.billingReference = entitlement.reference
         request.entitlementId = entitlement.entitlementId
@@ -192,7 +197,7 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
         return false
     }
 
-    private String createTenant(TenantRequest request) {
+    private void claimTenant(TenantRequest request) {
         TenantRequestValidator.validateAvailability(request.name, request.domain, tenantRepository.list())
 
         Tenant tenant = tenantRepository.create(new Tenant(
@@ -202,19 +207,24 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
                 billingMode: TenantBillingMode.SUBSCRIPTION,
                 status: TenantStatus.ACTIVE))
 
+        request.tenantGuid = tenant.guid
+        tenantRequestRepository.update(request.id, request)
+
         createTenantAdministrator(request, tenant.guid)
-        return tenant.guid
     }
 
-    private String restoreTenant(TenantRequest request) {
+    private void resumeTenant(TenantRequest request) {
         Tenant tenant = findTenantByGuid(request.tenantGuid)
         if (!tenant) {
             throw new TenantRequestException("Unable to locate tenant ${request.tenantGuid} for this request")
         }
+        markTenant(tenant, TenantStatus.ACTIVE)
 
-        setTenantStatus(tenant.guid, TenantStatus.ACTIVE)
-        setAdministratorActive(request, true)
-        return tenant.guid
+        if (request.status == TenantRequestStatus.SUSPENDED) {
+            setAdministratorActive(request, true)
+        } else {
+            createTenantAdministrator(request, tenant.guid)
+        }
     }
 
     private Tenant findTenantByGuid(String tenantGuid) {
@@ -232,6 +242,10 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
             log.warn("Unable to locate tenant ${tenantGuid} to mark it ${status}")
             return
         }
+        markTenant(tenant, status)
+    }
+
+    private void markTenant(Tenant tenant, String status) {
         if (tenant.status == status) {
             return
         }
