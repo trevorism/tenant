@@ -93,6 +93,9 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
         if (request.status == TenantRequestStatus.PROVISIONED) {
             throw new TenantRequestException("Tenant request ${requestId} has already been provisioned")
         }
+        if (entitlementProvider.forCaller(authentication)?.active) {
+            throw new TenantRequestException("This account already has an active subscription; provision the tenant rather than paying again")
+        }
 
         CheckoutRequest checkoutRequest = new CheckoutRequest(
                 planName: "Trevorism Tenant: ${request.name}",
@@ -141,7 +144,7 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
         if (!request) {
             throw new TenantRequestException("Unable to locate tenant request ${requestId}")
         }
-        if (request.tenantGuid) {
+        if (findTenantByGuid(request.tenantGuid)) {
             throw new TenantRequestException("Remove tenant ${request.tenantGuid} before deleting this request")
         }
         return tenantRequestRepository.delete(requestId)
@@ -270,15 +273,7 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
     }
 
     private void createTenantAdministrator(TenantRequest request, String tenantGuid) {
-        RegistrationRequest registration = new RegistrationRequest(
-                username: request.ownerUsername,
-                password: UUID.randomUUID().toString(),
-                email: request.ownerEmail,
-                tenantGuid: tenantGuid,
-                autoRegister: true,
-                doNotNotifySiteAdminOfRegistration: true,
-                permissions: TENANT_ADMIN_PERMISSIONS)
-        appHttpClient.post("${AUTH_BASE_URL}/user/", gson.toJson(registration))
+        registerAdministrator(request, tenantGuid)
 
         ActivationRequest activation = new ActivationRequest(
                 username: request.ownerUsername,
@@ -289,6 +284,22 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
 
         ForgotPasswordRequest reset = new ForgotPasswordRequest(username: request.ownerUsername, tenantGuid: tenantGuid)
         appHttpClient.post("${AUTH_BASE_URL}/user/reset", gson.toJson(reset))
+    }
+
+    private void registerAdministrator(TenantRequest request, String tenantGuid) {
+        RegistrationRequest registration = new RegistrationRequest(
+                username: request.ownerUsername,
+                password: UUID.randomUUID().toString(),
+                email: request.ownerEmail,
+                tenantGuid: tenantGuid,
+                autoRegister: true,
+                doNotNotifySiteAdminOfRegistration: true,
+                permissions: TENANT_ADMIN_PERMISSIONS)
+        try {
+            appHttpClient.post("${AUTH_BASE_URL}/user/", gson.toJson(registration))
+        } catch (Exception e) {
+            log.warn("Unable to register ${request.ownerUsername} in tenant ${tenantGuid}; continuing on the assumption the account exists: ${e.message}")
+        }
     }
 
     private void ensureEntitlementFundsOnlyThisRequest(String entitlementId, String requestId) {

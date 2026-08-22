@@ -31,6 +31,7 @@ class DefaultTenantProvisioningServiceTest {
     private Map<String, String> passThruGets = [:]
     private Map<String, Object> entitlementOverrides = [:]
     private Closure appPostListener = null
+    private Set<String> appPostFailures = [] as Set
 
     @Test
     void testRequestTenantPersistsAPendingRequestWithOwnerDetails() {
@@ -119,6 +120,49 @@ class DefaultTenantProvisioningServiceTest {
         assert captured.planName == "Trevorism Tenant: Acme"
         assert captured.successUrl == "https://trevorism.com/tenant?request=req-1&status=success"
         assert captured.cancelUrl == "https://trevorism.com/tenant?request=req-1&status=cancelled"
+    }
+
+    @Test
+    void testCreateCheckoutSessionRefusesWhenTheCallerAlreadyPays() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        boolean startedCheckout = false
+        entitlementOverrides.startCheckout = { CheckoutRequest r, Authentication a ->
+            startedCheckout = true
+            new Checkout(id: "cs_test_123", url: "https://checkout.example/cs_test_123")
+        }
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.createCheckoutSession("req-1", auth(OWNER_ID))
+        }
+        assert !startedCheckout
+    }
+
+    @Test
+    void testCreateCheckoutSessionRefusesToRestartAPaidSuspendedRequest() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        TenantRequest suspended = provisionedRequest()
+        suspended.status = TenantRequestStatus.SUSPENDED
+        def service = buildService(requestRepository([suspended]), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.createCheckoutSession("req-1", auth(OWNER_ID))
+        }
+    }
+
+    @Test
+    void testCreateCheckoutSessionProceedsWhenTheEntitlementStateIsUnknown() {
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
+
+        assert service.createCheckoutSession("req-1", auth(OWNER_ID)).id == "cs_test_123"
+    }
+
+    @Test
+    void testCreateCheckoutSessionProceedsWhenThereIsNoLiveSubscription() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.inactive(PROVIDER, "cus_1") }
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
+
+        assert service.createCheckoutSession("req-1", auth(OWNER_ID)).id == "cs_test_123"
     }
 
     @Test
@@ -264,12 +308,23 @@ class DefaultTenantProvisioningServiceTest {
     @Test
     void testDeleteRequestRefusesToOrphanAProvisionedTenant() {
         List<String> deleted = []
-        def service = buildService(requestRepository([provisionedRequest()], null, null, deleted), tenantRepository([]))
+        def service = buildService(requestRepository([provisionedRequest()], null, null, deleted),
+                tenantRepository([acmeTenant()]))
 
         assertThrows(TenantRequestException) {
             service.deleteRequest("req-1")
         }
         assert deleted.isEmpty()
+    }
+
+    @Test
+    void testDeleteRequestSucceedsOnceTheTenantIsGone() {
+        List<String> deleted = []
+        def service = buildService(requestRepository([provisionedRequest()], null, null, deleted), tenantRepository([]))
+
+        service.deleteRequest("req-1")
+
+        assert deleted == ["req-1"]
     }
 
     @Test
@@ -458,6 +513,33 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
+    void testResumingToleratesAnAdministratorThatWasAlreadyRegistered() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        appPostFailures << "https://auth.trevorism.com/user/"
+        TenantRequest halfProvisioned = pendingRequest()
+        halfProvisioned.tenantGuid = "guid-1"
+        def service = buildService(requestRepository([halfProvisioned]), tenantRepository([acmeTenant()]))
+
+        TenantRequest result = service.provision("req-1", auth(OWNER_ID))
+
+        assert result.status == TenantRequestStatus.PROVISIONED
+        assert appPosts.collect { it.url } == ["https://auth.trevorism.com/user/",
+                                               "https://auth.trevorism.com/user/activate",
+                                               "https://auth.trevorism.com/user/reset"]
+    }
+
+    @Test
+    void testAFailedActivationStillStopsProvisioning() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        appPostFailures << "https://auth.trevorism.com/user/activate"
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
+
+        assertThrows(RuntimeException) {
+            service.provision("req-1", auth(OWNER_ID))
+        }
+    }
+
+    @Test
     void testProvisionRestoresTheExistingTenantWhenTheRequestWasSuspended() {
         entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
         TenantRequest suspended = provisionedRequest()
@@ -535,7 +617,8 @@ class DefaultTenantProvisioningServiceTest {
         TenantRequest suspended = provisionedRequest()
         suspended.status = TenantRequestStatus.SUSPENDED
         List<String> deleted = []
-        def service = buildService(requestRepository([suspended], null, null, deleted), tenantRepository([]))
+        def service = buildService(requestRepository([suspended], null, null, deleted),
+                tenantRepository([acmeTenant()]))
 
         assertThrows(TenantRequestException) {
             service.deleteRequest("req-1")
@@ -566,6 +649,11 @@ class DefaultTenantProvisioningServiceTest {
 
         assert service.synchronizeEntitlements().updated == 1
         assert tenant.status == TenantStatus.ACTIVE
+    }
+
+    private static Tenant acmeTenant() {
+        return new Tenant(id: "t-1", name: "Acme", domain: "acme.com", guid: "guid-1",
+                billingMode: TenantBillingMode.SUBSCRIPTION, status: TenantStatus.ACTIVE)
     }
 
     private static TenantRequest pendingRequest() {
@@ -618,6 +706,9 @@ class DefaultTenantProvisioningServiceTest {
                 post: { String url, String body ->
                     posts << [url: url, body: body]
                     appPostListener?.call(url)
+                    if (appPostFailures.contains(url)) {
+                        throw new RuntimeException("simulated auth failure for ${url}")
+                    }
                     return "{}"
                 }
         ] as SecureHttpClient
