@@ -34,7 +34,7 @@ Feature: Self service tenant provisioning guards
     Then the tenant request is rejected with status 400
     And no tenant exists for the acceptance domain
 
-  Scenario: The entitlement sweep is not reachable anonymously
+  Scenario: Entitlement reconciliation is not reachable anonymously
     Given the tenant application is alive
-    When an anonymous caller triggers the entitlement sweep
+    When an anonymous caller triggers entitlement reconciliation
     Then the tenant request is rejected with status 401

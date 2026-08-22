@@ -67,11 +67,11 @@ When(/an authenticated caller requests a tenant on an already registered domain/
 }
 
 When(/an authenticated caller provisions a request that does not exist/) { ->
-    lastStatus = statusOf { appClient.post("${guardBaseUrl}/subscribedtenant/zz-no-such-request/provision", "{}") }
+    lastStatus = statusOf { appClient.post("${guardBaseUrl}/subscribedtenant/zz-no-such-request/tenant", "{}") }
 }
 
-When(/an anonymous caller triggers the entitlement sweep/) { ->
-    lastStatus = statusOf { httpClient.post("${guardBaseUrl}/subscribedtenant/sweep", "{}") }
+When(/an anonymous caller triggers entitlement reconciliation/) { ->
+    lastStatus = statusOf { httpClient.post("${guardBaseUrl}/subscribedtenant/reconciliation", "{}") }
 }
 
 Then(/the tenant request is rejected with status {int}/) { Integer expected ->

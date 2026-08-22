@@ -55,9 +55,9 @@ class SubscribedTenantController {
     }
 
     @Tag(name = "Subscribed Tenant Operations")
-    @Operation(summary = "Provisions the tenant once the subscription is active **Secure")
+    @Operation(summary = "Creates the tenant for a request once the subscription is active **Secure")
     @Secure(Roles.USER)
-    @Post(value = "/{requestId}/provision", produces = MediaType.APPLICATION_JSON)
+    @Post(value = "/{requestId}/tenant", produces = MediaType.APPLICATION_JSON)
     TenantRequestView provision(String requestId, Authentication authentication) {
         return TenantRequestView.from(invoke { tenantProvisioningService.provision(requestId, authentication) })
     }
@@ -71,9 +71,9 @@ class SubscribedTenantController {
     }
 
     @Tag(name = "Subscribed Tenant Operations")
-    @Operation(summary = "Suspends or restores subscribed tenants to match their subscription state **Secure")
+    @Operation(summary = "Reconciles subscribed tenants against their subscription state **Secure")
     @Secure(Roles.SYSTEM)
-    @Post(value = "/sweep", produces = MediaType.APPLICATION_JSON)
+    @Post(value = "/reconciliation", produces = MediaType.APPLICATION_JSON)
     Map synchronizeEntitlements() {
         return tenantProvisioningService.synchronizeEntitlements()
     }
