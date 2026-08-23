@@ -45,8 +45,28 @@ class TenantRequestValidatorTest {
     }
 
     @Test
+    void testAcceptsARequestWithoutADomain() {
+        validator.validate(new TenantRequestInput(name: "Acme"), "user-1", [], [])
+        validator.validate(new TenantRequestInput(name: "Acme", domain: "  "), "user-1", [], [])
+    }
+
+    @Test
+    void testNormalizesABlankDomainToNull() {
+        assert TenantRequestValidator.normalizeDomain("  ") == null
+        assert TenantRequestValidator.normalizeDomain(null) == null
+    }
+
+    @Test
+    void testDomainlessTenantsDoNotCollideWithEachOther() {
+        List<Tenant> tenants = [new Tenant(name: "Other", domain: null)]
+        List<TenantRequest> requests = [new TenantRequest(ownerUserId: "user-2", name: "Rival",
+                status: TenantRequestStatus.PENDING_PAYMENT)]
+        validator.validate(new TenantRequestInput(name: "Acme"), "user-1", tenants, requests)
+    }
+
+    @Test
     void testRejectsMalformedDomains() {
-        ["not a domain", "acme", "-acme.com", "acme-.com", "acme..com", "http://acme.com", ""].each { candidate ->
+        ["not a domain", "acme", "-acme.com", "acme-.com", "acme..com", "http://acme.com"].each { candidate ->
             assertThrows(TenantRequestException, {
                 validator.validate(new TenantRequestInput(name: "Acme", domain: candidate), "user-1", [], [])
             }, "expected ${candidate} to be rejected")

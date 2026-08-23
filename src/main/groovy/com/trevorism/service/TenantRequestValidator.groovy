@@ -20,7 +20,7 @@ class TenantRequestValidator {
     }
 
     static String normalizeDomain(String domain) {
-        return domain?.trim()?.toLowerCase()
+        return domain?.trim()?.toLowerCase() ?: null
     }
 
     void validate(TenantRequestInput input, String ownerUserId, List<Tenant> tenants, List<TenantRequest> requests) {
@@ -52,7 +52,10 @@ class TenantRequestValidator {
     }
 
     private static void validateDomain(String domain) {
-        if (!domain || domain.length() > MAXIMUM_DOMAIN_LENGTH || !DOMAIN_PATTERN.matcher(domain).matches()) {
+        if (!domain) {
+            return
+        }
+        if (domain.length() > MAXIMUM_DOMAIN_LENGTH || !DOMAIN_PATTERN.matcher(domain).matches()) {
             throw new TenantRequestException("A valid tenant domain is required")
         }
         if (RESERVED_DOMAIN_SUFFIXES.any { domain == it || domain.endsWith(".${it}") }) {
@@ -62,13 +65,13 @@ class TenantRequestValidator {
 
     static void validateAvailability(String name, String domain, List<Tenant> tenants,
                                      List<TenantRequest> reservations = []) {
-        if (tenants.any { normalizeDomain(it.domain) == domain }) {
+        if (domain && tenants.any { normalizeDomain(it.domain) == domain }) {
             throw new TenantRequestException("Domain ${domain} is already in use")
         }
         if (tenants.any { it.name?.equalsIgnoreCase(name) }) {
             throw new TenantRequestException("Tenant name ${name} is already in use")
         }
-        if (reservations.any { normalizeDomain(it.domain) == domain }) {
+        if (domain && reservations.any { normalizeDomain(it.domain) == domain }) {
             throw new TenantRequestException("Domain ${domain} is already reserved by another request")
         }
         if (reservations.any { it.name?.equalsIgnoreCase(name) }) {

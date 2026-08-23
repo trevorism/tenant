@@ -56,6 +56,21 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
+    void testRequestTenantPersistsARequestWithoutADomain() {
+        passThruGets[USER_ME_URL] = '{"id":"user-1","username":"trevor","email":"trevor@example.com"}'
+        TenantRequest created = null
+        def service = buildService(
+                requestRepository([], { TenantRequest r -> created = r; r.id = "req-1"; r }),
+                tenantRepository([]))
+
+        service.requestTenant(new TenantRequestInput(name: "Acme", domain: " "), auth(OWNER_ID))
+
+        assert created.name == "Acme"
+        assert created.domain == null
+        assert created.status == TenantRequestStatus.PENDING_PAYMENT
+    }
+
+    @Test
     void testRequestTenantRejectsADomainAlreadyInUse() {
         passThruGets[USER_ME_URL] = '{"id":"user-1","username":"trevor","email":"trevor@example.com"}'
         def service = buildService(requestRepository([]), tenantRepository([new Tenant(name: "Other", domain: "acme.com")]))
@@ -80,6 +95,13 @@ class DefaultTenantProvisioningServiceTest {
         def service = buildService(requestRepository([]), tenantRepository([]))
 
         assert service.checkAvailability(new TenantRequestInput(name: "Acme", domain: "acme.com")).available
+    }
+
+    @Test
+    void testAFreeNameWithoutADomainIsReportedAvailable() {
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([acmeTenant()]))
+
+        assert service.checkAvailability(new TenantRequestInput(name: "Other")).available
     }
 
     @Test
