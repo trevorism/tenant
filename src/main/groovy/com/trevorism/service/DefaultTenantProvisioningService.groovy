@@ -20,6 +20,7 @@ import com.trevorism.model.TenantRequest
 import com.trevorism.model.TenantRequestInput
 import com.trevorism.model.TenantRequestStatus
 import com.trevorism.model.TenantStatus
+import com.trevorism.model.SubscriptionView
 import io.micronaut.security.authentication.Authentication
 import jakarta.inject.Named
 import jakarta.inject.Singleton
@@ -88,6 +89,12 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
     TenantRequest getRequestForCaller(Authentication authentication) {
         List<TenantRequest> owned = requestsForOwner(callerId(authentication))
         return owned.find { it.status != TenantRequestStatus.SUSPENDED } ?: owned[0]
+    }
+
+    @Override
+    SubscriptionView getSubscriptionForCaller(Authentication authentication) {
+        callerId(authentication)
+        return SubscriptionView.from(entitlementProvider.forCaller(authentication))
     }
 
     @Override

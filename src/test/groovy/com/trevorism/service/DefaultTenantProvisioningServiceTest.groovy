@@ -104,6 +104,54 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
+    void testTheSubscriptionViewReportsAnActivePlan() {
+        Date renewal = new Date()
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", renewal) }
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        def view = service.getSubscriptionForCaller(auth(OWNER_ID))
+
+        assert view.state == "ACTIVE"
+        assert view.provider == PROVIDER
+        assert view.paidThrough == renewal
+    }
+
+    @Test
+    void testTheSubscriptionViewWithholdsBillingIdentifiers() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        List<String> exposed = service.getSubscriptionForCaller(auth(OWNER_ID)).properties.keySet() as List
+
+        assert !exposed.contains("reference")
+        assert !exposed.contains("entitlementId")
+    }
+
+    @Test
+    void testTheSubscriptionViewReportsAnUnreadableProviderAsUnknown() {
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        assert service.getSubscriptionForCaller(auth(OWNER_ID)).state == "UNKNOWN"
+    }
+
+    @Test
+    void testTheSubscriptionViewReportsALapsedPlanAsInactive() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.inactive(PROVIDER, "cus_1") }
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        assert service.getSubscriptionForCaller(auth(OWNER_ID)).state == "INACTIVE"
+    }
+
+    @Test
+    void testTheSubscriptionViewIsRefusedForAFederatedSignIn() {
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.getSubscriptionForCaller(oauthAuth("GOOGLE"))
+        }
+    }
+
+    @Test
     void testCreateCheckoutSessionAsksTheProviderForTheTenDollarPlan() {
         CheckoutRequest captured = null
         entitlementOverrides.startCheckout = { CheckoutRequest r, Authentication a ->
