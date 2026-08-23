@@ -2,6 +2,7 @@ package com.trevorism.controller
 
 import com.trevorism.model.TenantRequest
 import com.trevorism.model.TenantRequestInput
+import com.trevorism.model.SubscriptionView
 import com.trevorism.model.TenantRequestView
 import com.trevorism.secure.Roles
 import com.trevorism.secure.Secure
@@ -44,6 +45,14 @@ class SubscribedTenantController {
     HttpResponse<TenantRequestView> getCurrentRequest(Authentication authentication) {
         TenantRequest request = invoke { tenantProvisioningService.getRequestForCaller(authentication) }
         return request ? HttpResponse.ok(TenantRequestView.from(request)) : HttpResponse.noContent()
+    }
+
+    @Tag(name = "Subscribed Tenant Operations")
+    @Operation(summary = "Gets the subscription backing the current caller **Secure")
+    @Secure(Roles.USER)
+    @Get(value = "/subscription", produces = MediaType.APPLICATION_JSON)
+    SubscriptionView getSubscription(Authentication authentication) {
+        return invoke { tenantProvisioningService.getSubscriptionForCaller(authentication) }
     }
 
     @Tag(name = "Subscribed Tenant Operations")
