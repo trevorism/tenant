@@ -33,7 +33,6 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
     private static final Logger log = LoggerFactory.getLogger(DefaultTenantProvisioningService)
 
     static final String AUTH_BASE_URL = "https://auth.trevorism.com"
-    static final String EMAIL_BASE_URL = "https://email.action.trevorism.com"
     static final String PORTAL_BASE_URL = "https://trevorism.com/tenant"
     static final double MONTHLY_PRICE_DOLLARS = 10.00d
     static final String TENANT_ADMIN_PERMISSIONS = "CRUDE"
@@ -42,8 +41,6 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
     static final String OWNER_FIELD = "ownerUserId"
     static final String ENTITLEMENT_FIELD = "entitlementId"
     static final String GUID_FIELD = "guid"
-    static final int LAPSE_GRACE_DAYS = 7
-    static final long LAPSE_GRACE_MILLIS = LAPSE_GRACE_DAYS * 24L * 60L * 60L * 1000L
 
     private SecureHttpClient passThruHttpClient
     private SecureHttpClient appHttpClient
@@ -51,15 +48,18 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
     private Gson gson = new Gson()
 
     TenantEntitlementProvider entitlementProvider
+    TenantEmailer tenantEmailer
     Repository<TenantRequest> tenantRequestRepository
     Repository<Tenant> tenantRepository
 
     DefaultTenantProvisioningService(@Named("passThruSecureHttpClient") SecureHttpClient passThruHttpClient,
                                      @Named("appSecureHttpClient") SecureHttpClient appHttpClient,
-                                     TenantEntitlementProvider entitlementProvider) {
+                                     TenantEntitlementProvider entitlementProvider,
+                                     TenantEmailer tenantEmailer) {
         this.passThruHttpClient = passThruHttpClient
         this.appHttpClient = appHttpClient
         this.entitlementProvider = entitlementProvider
+        this.tenantEmailer = tenantEmailer
         this.tenantRequestRepository = new FastDatastoreRepository<>(TenantRequest, appHttpClient)
         this.tenantRepository = new FastDatastoreRepository<>(Tenant, appHttpClient)
     }
@@ -84,6 +84,20 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
                 dateCreated: new Date())
 
         return tenantRequestRepository.create(request)
+    }
+
+    @Override
+    Map checkAvailability(TenantRequestInput input) {
+        String name = TenantRequestValidator.normalizeName(input?.name)
+        String domain = TenantRequestValidator.normalizeDomain(input?.domain)
+        try {
+            validator.validateShape(name, domain)
+            TenantRequestValidator.validateAvailability(name, domain, tenantRepository.list(),
+                    TenantRequestValidator.openRequests(tenantRequestRepository.list() ?: []))
+            return [available: true]
+        } catch (TenantRequestException e) {
+            return [available: false, message: e.message]
+        }
     }
 
     @Override
@@ -119,6 +133,16 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
     }
 
     @Override
+    Map createBillingPortalSession(Authentication authentication) {
+        callerId(authentication)
+        Checkout portal = entitlementProvider.startBillingPortal(PORTAL_BASE_URL, authentication)
+        if (!portal?.url) {
+            throw new TenantRequestException("Unable to reach the billing provider")
+        }
+        return [url: portal.url]
+    }
+
+    @Override
     TenantRequest provision(String requestId, Authentication authentication) {
         TenantRequest request = requireOwnedRequest(requestId, authentication)
         if (request.status == TenantRequestStatus.PROVISIONED) {
@@ -126,7 +150,11 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
         }
 
         Entitlement entitlement = entitlementProvider.forCaller(authentication)
-        if (!entitlement?.active) {
+        if (!entitlement || entitlement.undetermined) {
+            log.info("Subscription for tenant request ${requestId} is not visible yet; leaving it pending")
+            return request
+        }
+        if (!entitlement.active) {
             throw new TenantRequestException("An active subscription is required before a tenant can be provisioned")
         }
         if (!entitlement.reference) {
@@ -147,7 +175,7 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
         request.status = TenantRequestStatus.PROVISIONED
         request.dateProvisioned = new Date()
         TenantRequest provisioned = tenantRequestRepository.update(request.id, request)
-        announceTenantIsReady(request)
+        tenantEmailer.sendTenantIsReady(request)
         return provisioned
     }
 
@@ -208,12 +236,17 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
             setTenantStatus(request.tenantGuid, TenantStatus.ACTIVE)
             setAdministratorActive(request, true)
             request.dateLapsed = null
-            return updateStatus(request, TenantRequestStatus.PROVISIONED, entitlement)
+            request.dateLapseReminded = null
+            boolean updated = updateStatus(request, TenantRequestStatus.PROVISIONED, entitlement)
+            tenantEmailer.sendTenantRestored(request)
+            return updated
         }
         if (request.dateLapsed) {
             log.info("Subscription for tenant request ${request.id} recovered before the grace period expired")
             request.dateLapsed = null
+            request.dateLapseReminded = null
             tenantRequestRepository.update(request.id, request)
+            tenantEmailer.sendTenantRestored(request)
             return true
         }
         return false
@@ -227,19 +260,37 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
             log.warn("Subscription for tenant request ${request.id} is no longer active; starting the grace period")
             request.dateLapsed = new Date()
             tenantRequestRepository.update(request.id, request)
+            tenantEmailer.sendPaymentFailed(request)
             return true
         }
         if (withinGracePeriod(request.dateLapsed)) {
-            return false
+            return remindBeforeSuspension(request)
         }
 
         setTenantStatus(request.tenantGuid, TenantStatus.SUSPENDED)
         setAdministratorActive(request, false)
-        return updateStatus(request, TenantRequestStatus.SUSPENDED, entitlement)
+        boolean updated = updateStatus(request, TenantRequestStatus.SUSPENDED, entitlement)
+        tenantEmailer.sendTenantSuspended(request)
+        return updated
+    }
+
+    private boolean remindBeforeSuspension(TenantRequest request) {
+        if (request.dateLapseReminded || !withinReminderWindow(request.dateLapsed)) {
+            return false
+        }
+        request.dateLapseReminded = new Date()
+        tenantRequestRepository.update(request.id, request)
+        tenantEmailer.sendPaymentFailedReminder(request)
+        return true
     }
 
     private static boolean withinGracePeriod(Date dateLapsed) {
-        return dateLapsed.time + LAPSE_GRACE_MILLIS > System.currentTimeMillis()
+        return dateLapsed.time + TenantRequest.LAPSE_GRACE_MILLIS > System.currentTimeMillis()
+    }
+
+    private static boolean withinReminderWindow(Date dateLapsed) {
+        long reminderMillis = TenantRequest.LAPSE_REMINDER_DAYS_BEFORE_END * 24L * 60L * 60L * 1000L
+        return dateLapsed.time + TenantRequest.LAPSE_GRACE_MILLIS - reminderMillis <= System.currentTimeMillis()
     }
 
     private void claimTenant(TenantRequest request) {
@@ -320,43 +371,11 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
         ActivationRequest activation = new ActivationRequest(
                 username: request.ownerUsername,
                 tenantGuid: tenantGuid,
-                isAdmin: true,
-                doNotSendWelcomeEmail: false)
+                isAdmin: true)
         appHttpClient.post("${AUTH_BASE_URL}/user/activate", gson.toJson(activation))
 
         ForgotPasswordRequest reset = new ForgotPasswordRequest(username: request.ownerUsername, tenantGuid: tenantGuid)
         appHttpClient.post("${AUTH_BASE_URL}/user/reset", gson.toJson(reset))
-    }
-
-    private void announceTenantIsReady(TenantRequest request) {
-        if (!request.ownerEmail) {
-            return
-        }
-
-        String name = escapeHtml(request.name)
-        String domain = escapeHtml(request.domain)
-        String subject = "Your Trevorism tenant ${name} is ready".toString()
-        String body = ("<p><strong>${name}</strong> is now active at ${domain}.</p>" +
-                "<p>You are the tenant administrator. A separate email lets you set your password; " +
-                "after that, sign in at <a href=\"https://${domain}\">${domain}</a> as " +
-                "${escapeHtml(request.ownerUsername)}.</p>" +
-                "<p>Your subscription renews monthly. Cancel anytime from your billing provider; " +
-                "cancelling suspends tenant administrator access.</p>").toString()
-
-        Map mail = [subject: subject, recipients: [request.ownerEmail], body: body]
-
-        try {
-            appHttpClient.post("${EMAIL_BASE_URL}/mail/", gson.toJson(mail))
-        } catch (Exception e) {
-            log.warn("Unable to send the tenant ready email for request ${request.id}: ${e.message}")
-        }
-    }
-
-    private static String escapeHtml(String value) {
-        return value?.replace("&", "&amp;")
-                ?.replace("<", "&lt;")
-                ?.replace(">", "&gt;")
-                ?.replace('"', "&quot;")
     }
 
     private void registerAdministrator(TenantRequest request, String tenantGuid) {

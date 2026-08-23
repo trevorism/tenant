@@ -73,7 +73,7 @@ class SubscribedTenantControllerTest {
         assert !(body instanceof TenantRequest)
         assert !body.properties.containsKey("billingReference")
         assert !body.properties.containsKey("entitlementId")
-        assert !body.properties.containsKey("tenantGuid")
+        assert body.tenantGuid == "guid-1"
     }
 
     @Test
@@ -96,7 +96,7 @@ class SubscribedTenantControllerTest {
 
         assert view.id == "req-1"
         assert view.status == TenantRequestStatus.PROVISIONED
-        assert !view.properties.containsKey("tenantGuid")
+        assert view.loginUrl == "https://login.auth.trevorism.com/guid-1"
     }
 
     @Test
@@ -113,6 +113,39 @@ class SubscribedTenantControllerTest {
         } catch (HttpStatusException e) {
             assert e.status == HttpStatus.BAD_REQUEST
         }
+    }
+
+    @Test
+    void testCreateBillingPortalSessionReturnsTheProvidersUrl() {
+        SubscribedTenantController controller = controllerWith([
+                createBillingPortalSession: { Authentication auth -> [url: "https://billing.example/session"] }
+        ])
+
+        assert controller.createBillingPortalSession(authentication()).url == "https://billing.example/session"
+    }
+
+    @Test
+    void testCreateBillingPortalSessionTranslatesAFailureToBadRequest() {
+        SubscribedTenantController controller = controllerWith([
+                createBillingPortalSession: { Authentication auth ->
+                    throw new TenantRequestException("Unable to reach the billing provider")
+                }
+        ])
+
+        try {
+            controller.createBillingPortalSession(authentication())
+            assert false
+        } catch (HttpStatusException e) {
+            assert e.status == HttpStatus.BAD_REQUEST
+        }
+    }
+
+    @Test
+    void testTheBillingPortalIsReachableByAnOrdinaryUser() {
+        Secure secure = SubscribedTenantController.getMethod("createBillingPortalSession", Authentication)
+                .getAnnotation(Secure)
+
+        assert secure.value() == Roles.USER
     }
 
     @Test

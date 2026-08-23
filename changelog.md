@@ -1,3 +1,7 @@
+## 1.3.0
+
+Allow for subscribed tenants to query stripe for their subscription status and billing history.
+
 ## 1.2.0
 
 Handle google/microsoft based logins for subscribed tenants as an error for now.

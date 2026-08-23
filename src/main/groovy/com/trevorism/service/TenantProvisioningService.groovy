@@ -8,9 +8,11 @@ import io.micronaut.security.authentication.Authentication
 interface TenantProvisioningService {
 
     TenantRequest requestTenant(TenantRequestInput input, Authentication authentication)
+    Map checkAvailability(TenantRequestInput input)
     TenantRequest getRequestForCaller(Authentication authentication)
     SubscriptionView getSubscriptionForCaller(Authentication authentication)
     Map createCheckoutSession(String requestId, Authentication authentication)
+    Map createBillingPortalSession(Authentication authentication)
     TenantRequest provision(String requestId, Authentication authentication)
     TenantRequest deleteRequest(String requestId)
     Map synchronizeEntitlements()

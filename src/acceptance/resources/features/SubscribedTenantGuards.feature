@@ -38,3 +38,13 @@ Feature: Self service tenant provisioning guards
     Given the tenant application is alive
     When an anonymous caller triggers entitlement reconciliation
     Then the tenant request is rejected with status 401
+
+  Scenario: The billing portal is not reachable anonymously
+    Given the tenant application is alive
+    When an anonymous caller opens the billing portal
+    Then the tenant request is rejected with status 401
+
+  Scenario: Availability cannot be probed anonymously
+    Given the tenant application is alive
+    When an anonymous caller checks whether a domain is available
+    Then the tenant request is rejected with status 401

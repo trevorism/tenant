@@ -74,6 +74,14 @@ When(/an anonymous caller triggers entitlement reconciliation/) { ->
     lastStatus = statusOf { httpClient.post("${guardBaseUrl}/subscribedtenant/reconciliation", "{}") }
 }
 
+When(/an anonymous caller opens the billing portal/) { ->
+    lastStatus = statusOf { httpClient.post("${guardBaseUrl}/subscribedtenant/portal", "{}") }
+}
+
+When(/an anonymous caller checks whether a domain is available/) { ->
+    lastStatus = statusOf { httpClient.post("${guardBaseUrl}/subscribedtenant/availability", requestBody("zz_probe", "zz-probe.test")) }
+}
+
 Then(/the tenant request is rejected with status {int}/) { Integer expected ->
     assert lastStatus == expected
 }

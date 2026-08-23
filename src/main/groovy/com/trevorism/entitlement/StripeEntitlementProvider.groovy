@@ -47,6 +47,13 @@ class StripeEntitlementProvider implements TenantEntitlementProvider {
     }
 
     @Override
+    Checkout startBillingPortal(String returnUrl, Authentication authentication) {
+        String json = passThruHttpClient.post("${BASE_URL}/api/subscription/portal", gson.toJson([returnUrl: returnUrl]))
+        Map session = gson.fromJson(json, Map)
+        return new Checkout(url: session?.url as String)
+    }
+
+    @Override
     Entitlement forCaller(Authentication authentication) {
         try {
             return toEntitlement(passThruHttpClient.get("${BASE_URL}/api/subscription"))

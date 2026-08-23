@@ -39,6 +39,14 @@ class SubscribedTenantController {
     }
 
     @Tag(name = "Subscribed Tenant Operations")
+    @Operation(summary = "Reports whether a tenant name and domain are still free **Secure")
+    @Secure(Roles.USER)
+    @Post(value = "/availability", produces = MediaType.APPLICATION_JSON, consumes = MediaType.APPLICATION_JSON)
+    Map checkAvailability(@Body TenantRequestInput input) {
+        return invoke { tenantProvisioningService.checkAvailability(input) }
+    }
+
+    @Tag(name = "Subscribed Tenant Operations")
     @Operation(summary = "Gets the subscribed tenant request of the current caller **Secure")
     @Secure(Roles.USER)
     @Get(value = "/me", produces = MediaType.APPLICATION_JSON)
@@ -61,6 +69,14 @@ class SubscribedTenantController {
     @Post(value = "/{requestId}/session", produces = MediaType.APPLICATION_JSON)
     Map createCheckoutSession(String requestId, Authentication authentication) {
         return invoke { tenantProvisioningService.createCheckoutSession(requestId, authentication) }
+    }
+
+    @Tag(name = "Subscribed Tenant Operations")
+    @Operation(summary = "Creates a billing portal session for the current caller **Secure")
+    @Secure(Roles.USER)
+    @Post(value = "/portal", produces = MediaType.APPLICATION_JSON)
+    Map createBillingPortalSession(Authentication authentication) {
+        return invoke { tenantProvisioningService.createBillingPortalSession(authentication) }
     }
 
     @Tag(name = "Subscribed Tenant Operations")

@@ -35,10 +35,58 @@ class TenantRequestViewTest {
         assert !exposed.contains("billingReference")
         assert !exposed.contains("entitlementId")
         assert !exposed.contains("billingProvider")
-        assert !exposed.contains("tenantGuid")
         assert !exposed.contains("ownerUserId")
         assert !exposed.contains("ownerEmail")
         assert !exposed.contains("ownerUsername")
+    }
+
+    @Test
+    void testTheViewHandsTheOwnerTheirOwnTenantIdAndLoginUrl() {
+        TenantRequest request = new TenantRequest(id: "req-1", status: TenantRequestStatus.PROVISIONED,
+                tenantGuid: "guid-1")
+
+        TenantRequestView view = TenantRequestView.from(request)
+
+        assert view.tenantGuid == "guid-1"
+        assert view.loginUrl == "https://login.auth.trevorism.com/guid-1"
+    }
+
+    @Test
+    void testThereIsNoLoginUrlBeforeTheTenantExists() {
+        TenantRequest request = new TenantRequest(id: "req-1", status: TenantRequestStatus.PENDING_PAYMENT)
+
+        TenantRequestView view = TenantRequestView.from(request)
+
+        assert !view.tenantGuid
+        assert !view.loginUrl
+    }
+
+    @Test
+    void testALapsedRequestReportsWhenAccessEnds() {
+        Date lapsed = new Date()
+        TenantRequest request = new TenantRequest(id: "req-1", status: TenantRequestStatus.PROVISIONED,
+                tenantGuid: "guid-1", dateLapsed: lapsed)
+
+        TenantRequestView view = TenantRequestView.from(request)
+
+        assert view.dateLapsed == lapsed
+        assert view.accessEndsOn == new Date(lapsed.time + TenantRequest.LAPSE_GRACE_MILLIS)
+    }
+
+    @Test
+    void testAHealthyRequestHasNoAccessDeadline() {
+        TenantRequest request = new TenantRequest(id: "req-1", status: TenantRequestStatus.PROVISIONED,
+                tenantGuid: "guid-1")
+
+        assert !TenantRequestView.from(request).accessEndsOn
+    }
+
+    @Test
+    void testASuspendedRequestNoLongerCountsDownToSuspension() {
+        TenantRequest request = new TenantRequest(id: "req-1", status: TenantRequestStatus.SUSPENDED,
+                tenantGuid: "guid-1", dateLapsed: new Date())
+
+        assert !TenantRequestView.from(request).accessEndsOn
     }
 
     @Test
