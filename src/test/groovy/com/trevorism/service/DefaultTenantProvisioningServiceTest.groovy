@@ -76,6 +76,40 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
+    void testAFreeNameAndDomainAreReportedAvailable() {
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        assert service.checkAvailability(new TenantRequestInput(name: "Acme", domain: "acme.com")).available
+    }
+
+    @Test
+    void testATakenDomainIsReportedWithTheReason() {
+        def service = buildService(requestRepository([]), tenantRepository([acmeTenant()]))
+
+        Map result = service.checkAvailability(new TenantRequestInput(name: "Other", domain: "ACME.com "))
+
+        assert !result.available
+        assert result.message.contains("already in use")
+    }
+
+    @Test
+    void testAMalformedDomainIsReportedBeforeItIsEverSubmitted() {
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        Map result = service.checkAvailability(new TenantRequestInput(name: "Acme", domain: "not a domain"))
+
+        assert !result.available
+        assert result.message.contains("valid tenant domain")
+    }
+
+    @Test
+    void testADomainReservedByAnotherOpenRequestIsNotAvailable() {
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
+
+        assert !service.checkAvailability(new TenantRequestInput(name: "Other", domain: "acme.com")).available
+    }
+
+    @Test
     void testGetRequestForCallerReturnsTheOwnedRequest() {
         TenantRequest owned = pendingRequest()
         def service = buildService(requestRepository([owned]), tenantRepository([]))
@@ -232,6 +266,38 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
+    void testCreateBillingPortalSessionReturnsTheProvidersUrl() {
+        String captured = null
+        entitlementOverrides.startBillingPortal = { String returnUrl, Authentication a ->
+            captured = returnUrl
+            new Checkout(url: "https://billing.example/session")
+        }
+        def service = buildService(requestRepository([provisionedRequest()]), tenantRepository([]))
+
+        assert service.createBillingPortalSession(auth(OWNER_ID)).url == "https://billing.example/session"
+        assert captured == "https://trevorism.com/tenant"
+    }
+
+    @Test
+    void testCreateBillingPortalSessionFailsClearlyWhenTheProviderReturnsNothing() {
+        entitlementOverrides.startBillingPortal = { String returnUrl, Authentication a -> new Checkout() }
+        def service = buildService(requestRepository([provisionedRequest()]), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.createBillingPortalSession(auth(OWNER_ID))
+        }
+    }
+
+    @Test
+    void testCreateBillingPortalSessionIsRefusedForAFederatedSignIn() {
+        def service = buildService(requestRepository([]), tenantRepository([]))
+
+        assertThrows(TenantRequestException) {
+            service.createBillingPortalSession(oauthAuth("GOOGLE"))
+        }
+    }
+
+    @Test
     void testProvisionRequiresAnActiveEntitlement() {
         entitlementOverrides.forCaller = { Authentication a -> Entitlement.inactive(PROVIDER, "cus_1") }
         def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
@@ -243,14 +309,28 @@ class DefaultTenantProvisioningServiceTest {
     }
 
     @Test
-    void testProvisionTreatsAnUndeterminedEntitlementAsUnpaid() {
+    void testProvisionLeavesTheRequestPendingWhileTheSubscriptionIsStillInvisible() {
         entitlementOverrides.forCaller = { Authentication a -> Entitlement.unknown(PROVIDER) }
         def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
 
-        assertThrows(TenantRequestException) {
-            service.provision("req-1", auth(OWNER_ID))
-        }
+        TenantRequest result = service.provision("req-1", auth(OWNER_ID))
+
+        assert result.status == TenantRequestStatus.PENDING_PAYMENT
+        assert !result.tenantGuid
         assert appPosts.isEmpty()
+    }
+
+    @Test
+    void testProvisionSucceedsOnceTheWebhookCatchesUp() {
+        int attempt = 0
+        entitlementOverrides.forCaller = { Authentication a ->
+            attempt++ < 2 ? Entitlement.unknown(PROVIDER) : Entitlement.active(PROVIDER, "cus_1", "sub_1", null)
+        }
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
+
+        assert service.provision("req-1", auth(OWNER_ID)).status == TenantRequestStatus.PENDING_PAYMENT
+        assert service.provision("req-1", auth(OWNER_ID)).status == TenantRequestStatus.PENDING_PAYMENT
+        assert service.provision("req-1", auth(OWNER_ID)).status == TenantRequestStatus.PROVISIONED
     }
 
     @Test
@@ -316,12 +396,53 @@ class DefaultTenantProvisioningServiceTest {
 
         service.provision("req-1", auth(OWNER_ID))
 
-        Map mail = gson.fromJson(appPosts.find { it.url.startsWith("https://email") }.body as String, Map)
+        Map mail = lastEmail()
         assert appPosts.last().url == "https://email.action.trevorism.com/mail/"
         assert mail.recipients == ["trevor@example.com"]
         assert mail.subject.contains("Acme")
-        assert mail.body.contains("acme.com")
-        assert !mail.body.toLowerCase().contains("password reset link")
+    }
+
+    @Test
+    void testTheReadyEmailSendsTheOwnerToTheirTenantLoginRatherThanTheirOwnDomain() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        Tenant created = null
+        def service = buildService(requestRepository([pendingRequest()]),
+                tenantRepository([], { Tenant t -> created = t; t }))
+
+        service.provision("req-1", auth(OWNER_ID))
+
+        String body = lastEmail().body
+        assert body.contains("https://login.auth.trevorism.com/${created.guid}")
+        assert !body.contains("https://acme.com")
+    }
+
+    @Test
+    void testTheReadyEmailExplainsTheDeadlineTheSeparateAccountAndWhereToGoNext() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        Tenant created = null
+        def service = buildService(requestRepository([pendingRequest()]),
+                tenantRepository([], { Tenant t -> created = t; t }))
+
+        service.provision("req-1", auth(OWNER_ID))
+
+        String body = lastEmail().body
+        assert body.contains("24 hours")
+        assert body.contains("https://login.auth.trevorism.com/forgot/${created.guid}")
+        assert body.contains("trevorism.com account is unchanged")
+        assert body.contains("https://admin.auth.trevorism.com")
+        assert body.contains("https://trevorism.com/tenant")
+    }
+
+    @Test
+    void testProvisionNoLongerAsksAuthToSendItsOwnWelcomeEmail() {
+        entitlementOverrides.forCaller = { Authentication a -> Entitlement.active(PROVIDER, "cus_1", "sub_1", null) }
+        def service = buildService(requestRepository([pendingRequest()]), tenantRepository([]))
+
+        service.provision("req-1", auth(OWNER_ID))
+
+        Map activation = gson.fromJson(appPosts.find { it.url.endsWith("/user/activate") }.body as String, Map)
+        assert activation.doNotSendWelcomeEmail
+        assert emailPosts().size() == 1
     }
 
     @Test
@@ -434,21 +555,76 @@ class DefaultTenantProvisioningServiceTest {
                 tenantRepository([]))
 
         assert service.synchronizeEntitlements().updated == 1
-        assert appPosts.isEmpty()
         assert updated.status == TenantRequestStatus.PROVISIONED
         assert updated.dateLapsed
     }
 
     @Test
-    void testATenantIsLeftAloneWhileTheGracePeriodRuns() {
+    void testAFirstLapseWarnsTheOwnerBeforeAnythingIsSuspended() {
+        entitlementOverrides.forReference = { String reference -> Entitlement.inactive(PROVIDER, reference) }
+        def service = buildService(requestRepository([provisionedRequest()]), tenantRepository([]))
+
+        service.synchronizeEntitlements()
+
+        assert emailPosts().size() == 1
+        Map mail = lastEmail()
+        assert mail.subject.contains("payment failed")
+        assert mail.body.contains("https://trevorism.com/tenant")
+        assert authPosts().isEmpty()
+    }
+
+    @Test
+    void testATenantIsLeftAloneEarlyInTheGracePeriod() {
         entitlementOverrides.forReference = { String reference -> Entitlement.inactive(PROVIDER, reference) }
         TenantRequest lapsed = provisionedRequest()
-        lapsed.dateLapsed = daysAgo(6)
+        lapsed.dateLapsed = daysAgo(3)
         def service = buildService(requestRepository([lapsed]), tenantRepository([acmeTenant()]))
 
         assert service.synchronizeEntitlements().updated == 0
         assert appPosts.isEmpty()
         assert lapsed.status == TenantRequestStatus.PROVISIONED
+    }
+
+    @Test
+    void testAFinalReminderGoesOutShortlyBeforeSuspension() {
+        entitlementOverrides.forReference = { String reference -> Entitlement.inactive(PROVIDER, reference) }
+        TenantRequest lapsed = provisionedRequest()
+        lapsed.dateLapsed = daysAgo(6)
+        def service = buildService(requestRepository([lapsed]), tenantRepository([acmeTenant()]))
+
+        assert service.synchronizeEntitlements().updated == 1
+
+        assert emailPosts().size() == 1
+        assert lastEmail().subject.contains("Final reminder")
+        assert lapsed.status == TenantRequestStatus.PROVISIONED
+        assert lapsed.dateLapseReminded
+    }
+
+    @Test
+    void testTheFinalReminderIsNotRepeatedOnEveryReconciliation() {
+        entitlementOverrides.forReference = { String reference -> Entitlement.inactive(PROVIDER, reference) }
+        TenantRequest lapsed = provisionedRequest()
+        lapsed.dateLapsed = daysAgo(6)
+        def service = buildService(requestRepository([lapsed]), tenantRepository([acmeTenant()]))
+
+        service.synchronizeEntitlements()
+        assert service.synchronizeEntitlements().updated == 0
+
+        assert emailPosts().size() == 1
+    }
+
+    @Test
+    void testSuspensionTellsTheOwnerTheirDataIsRetained() {
+        entitlementOverrides.forReference = { String reference -> Entitlement.inactive(PROVIDER, reference) }
+        TenantRequest lapsed = provisionedRequest()
+        lapsed.dateLapsed = daysAgo(8)
+        def service = buildService(requestRepository([lapsed]), tenantRepository([acmeTenant()]))
+
+        service.synchronizeEntitlements()
+
+        Map mail = lastEmail()
+        assert mail.subject.contains("suspended")
+        assert mail.body.contains("data is retained")
     }
 
     @Test
@@ -479,9 +655,10 @@ class DefaultTenantProvisioningServiceTest {
                 tenantRepository([acmeTenant()]))
 
         assert service.synchronizeEntitlements().updated == 1
-        assert appPosts.isEmpty()
+        assert authPosts().isEmpty()
         assert updated.status == TenantRequestStatus.PROVISIONED
         assert !updated.dateLapsed
+        assert lastEmail().subject.contains("active again")
     }
 
     @Test
@@ -865,7 +1042,8 @@ class DefaultTenantProvisioningServiceTest {
 
     private DefaultTenantProvisioningService buildService(Repository<TenantRequest> requests, Repository<Tenant> tenants) {
         DefaultTenantProvisioningService service = new DefaultTenantProvisioningService(
-                stubClient(passThruGets, []), stubClient([:], appPosts), stubEntitlementProvider())
+                stubClient(passThruGets, []), stubClient([:], appPosts), stubEntitlementProvider(),
+                new TenantEmailer(stubClient([:], appPosts)))
         service.tenantRequestRepository = requests
         service.tenantRepository = tenants
         return service
@@ -873,12 +1051,21 @@ class DefaultTenantProvisioningServiceTest {
 
     private TenantEntitlementProvider stubEntitlementProvider() {
         Map behaviour = [
-                getName      : { PROVIDER },
-                startCheckout: { CheckoutRequest r, Authentication a -> new Checkout(id: "cs_test_123", url: "https://checkout.example/cs_test_123") },
-                forCaller    : { Authentication a -> Entitlement.unknown(PROVIDER) },
-                forReference : { String reference -> Entitlement.unknown(PROVIDER) }
+                getName           : { PROVIDER },
+                startCheckout     : { CheckoutRequest r, Authentication a -> new Checkout(id: "cs_test_123", url: "https://checkout.example/cs_test_123") },
+                startBillingPortal: { String returnUrl, Authentication a -> new Checkout(url: "https://billing.example/session") },
+                forCaller         : { Authentication a -> Entitlement.unknown(PROVIDER) },
+                forReference      : { String reference -> Entitlement.unknown(PROVIDER) }
         ]
         return (behaviour + entitlementOverrides) as TenantEntitlementProvider
+    }
+
+    private List<Map> emailPosts() {
+        return appPosts.findAll { it.url.startsWith("https://email") }
+    }
+
+    private Map lastEmail() {
+        return gson.fromJson(emailPosts().last().body as String, Map)
     }
 
     private SecureHttpClient stubClient(Map<String, String> gets, List<Map> posts) {

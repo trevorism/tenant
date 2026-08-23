@@ -31,10 +31,14 @@ class TenantRequestValidator {
         String name = normalizeName(input?.name)
         String domain = normalizeDomain(input?.domain)
 
-        validateName(name)
-        validateDomain(domain)
+        validateShape(name, domain)
         validateOwnerHasNoOpenRequest(requests.findAll { it.ownerUserId == ownerUserId })
         validateAvailability(name, domain, tenants, openRequests(requests))
+    }
+
+    void validateShape(String name, String domain) {
+        validateName(name)
+        validateDomain(domain)
     }
 
     static List<TenantRequest> openRequests(List<TenantRequest> requests) {
