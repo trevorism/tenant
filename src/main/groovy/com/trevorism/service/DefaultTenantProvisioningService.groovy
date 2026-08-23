@@ -32,6 +32,7 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
     private static final Logger log = LoggerFactory.getLogger(DefaultTenantProvisioningService)
 
     static final String AUTH_BASE_URL = "https://auth.trevorism.com"
+    static final String EMAIL_BASE_URL = "https://email.action.trevorism.com"
     static final String PORTAL_BASE_URL = "https://trevorism.com/tenant"
     static final double MONTHLY_PRICE_DOLLARS = 10.00d
     static final String TENANT_ADMIN_PERMISSIONS = "CRUDE"
@@ -138,7 +139,9 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
         request.paidThrough = entitlement.paidThrough
         request.status = TenantRequestStatus.PROVISIONED
         request.dateProvisioned = new Date()
-        return tenantRequestRepository.update(request.id, request)
+        TenantRequest provisioned = tenantRequestRepository.update(request.id, request)
+        announceTenantIsReady(request)
+        return provisioned
     }
 
     @Override
@@ -316,6 +319,37 @@ class DefaultTenantProvisioningService implements TenantProvisioningService {
 
         ForgotPasswordRequest reset = new ForgotPasswordRequest(username: request.ownerUsername, tenantGuid: tenantGuid)
         appHttpClient.post("${AUTH_BASE_URL}/user/reset", gson.toJson(reset))
+    }
+
+    private void announceTenantIsReady(TenantRequest request) {
+        if (!request.ownerEmail) {
+            return
+        }
+
+        String name = escapeHtml(request.name)
+        String domain = escapeHtml(request.domain)
+        String subject = "Your Trevorism tenant ${name} is ready".toString()
+        String body = ("<p><strong>${name}</strong> is now active at ${domain}.</p>" +
+                "<p>You are the tenant administrator. A separate email lets you set your password; " +
+                "after that, sign in at <a href=\"https://${domain}\">${domain}</a> as " +
+                "${escapeHtml(request.ownerUsername)}.</p>" +
+                "<p>Your subscription renews monthly. Cancel anytime from your billing provider; " +
+                "cancelling suspends tenant administrator access.</p>").toString()
+
+        Map mail = [subject: subject, recipients: [request.ownerEmail], body: body]
+
+        try {
+            appHttpClient.post("${EMAIL_BASE_URL}/mail/", gson.toJson(mail))
+        } catch (Exception e) {
+            log.warn("Unable to send the tenant ready email for request ${request.id}: ${e.message}")
+        }
+    }
+
+    private static String escapeHtml(String value) {
+        return value?.replace("&", "&amp;")
+                ?.replace("<", "&lt;")
+                ?.replace(">", "&gt;")
+                ?.replace('"', "&quot;")
     }
 
     private void registerAdministrator(TenantRequest request, String tenantGuid) {
