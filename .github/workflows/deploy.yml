@@ -5,10 +5,7 @@ on:
     branches: [ master ]
   pull_request:
     branches: [ master ]
-    types: [ opened, synchronize, reopened ]
-  pull_request_target:
-    branches: [ master ]
-    types: [ closed ]
+    types: [ opened, synchronize, reopened, closed ]
   workflow_dispatch:
 
 permissions:
